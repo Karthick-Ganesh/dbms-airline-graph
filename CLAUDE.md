@@ -4,7 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This is a course project for BCSE302P (Database Systems Lab): **Graph-Based Airline Route Optimization for Disruption Analysis and Sustainable Travel**, built on **Neo4j** and its Graph Data Science (GDS) library. So far the repo holds only design documents. There is no application code, build tooling or tests yet, and it is not a git repository.
+This is a course project for BCSE302P (Database Systems Lab): **Graph-Based Airline Route Optimization for Disruption Analysis and Sustainable Travel**, built on **Neo4j** and its Graph Data Science (GDS) library. The code so far is a single seed script. There is no application or test suite yet.
+
+## Commands
+
+Use the project venv. The system-wide Python's pandas is broken by a numpy binary mismatch.
+
+```bash
+python -m venv .venv && .venv/Scripts/python -m pip install -r requirements.txt
+.venv/Scripts/python seed.py --dry-run   # parse the source data only, no DB needed
+.venv/Scripts/python seed.py             # needs NEO4J_PASSWORD; optional NEO4J_URI, NEO4J_USER
+```
+
+`seed.py` is idempotent: it uses `MERGE` on each label's unique key, and it creates the constraints before loading. Add each new label as a `read_*`/`load_*` pair, following the Engine pattern.
+
+- `edb-emissions-databank_v32__web_.xlsx`: the ICAO Engine Emissions Databank, the source for `:Engine` nodes. Only 6 of its roughly 105 columns in sheet `Gaseous Emissions and Smoke` are used (see `ENGINE_COLUMNS` in `seed.py`). Some headers have trailing spaces, so headers are stripped before columns are selected.
 
 - `dbms_review_transcription.md`: the Review 1 design (problem statement, why Neo4j, ER-to-graph mapping, full graph schema, sample data). **This is the source of truth for the data model.** When you add code, keep it consistent with this document, or update the document in the same change.
 - `bcse302p_rubrics.md`: the grading rubric for the three reviews. Use it to decide what to build next and what "done" means.
