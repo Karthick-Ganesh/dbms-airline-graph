@@ -166,7 +166,7 @@ MATCH (:Airport {airport_id: $src})-[r:ROUTE]->(:Airport {airport_id: $dst})
 UNWIND r.aircraft_types AS type_id
 MATCH (ac:Aircraft {aircraft_type_id: type_id})-[p:POWERED_BY]->(e:Engine)
 RETURN ac.model AS aircraft, e.engine_model AS engine, e.manufacturer AS maker,
-       e.bypass_ratio AS bypass_ratio, e.fuel_lto_cycle_kg AS lto_fuel_kg,
+       round(e.bypass_ratio, 2) AS bypass_ratio, round(e.fuel_lto_cycle_kg) AS lto_fuel_kg,
        p.is_default_engine AS default_engine
 ORDER BY bypass_ratio DESC
 """, {"src": "DEL", "dst": "BOM"}),
