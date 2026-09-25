@@ -79,7 +79,7 @@ The scope of this project encompasses the design and implementation of a directe
 | `name` | String | Full airport name | 
 | `city` | String | City served | 
 | `country` | String | Country | 
-| `region` (new) | String | Geographic grouping (e.g., "North America", "Western Europe") enables regional cascading-disruption queries (e.g., "close all airports in a storm-affected region") | 
+| `region` (new) | String | Continent-level geographic grouping (e.g., "North America", "Europe", "Asia") enables regional cascading-disruption queries (e.g., "close all airports in a storm-affected region") | 
 | `location` | Point (spatial) | `point({latitude, longitude})` enables spatial/distance queries | 
 | `elevation_m` | Float | Elevation above sea level | 
 | `timezone` | String | IANA timezone id | 
@@ -105,10 +105,13 @@ The scope of this project encompasses the design and implementation of a directe
 | `aircraft_type_id` | String | Internal type code (e.g., "B77W") | 
 | `model` | String | e.g., "Boeing 777-300ER" | 
 | `manufacturer` | String | e.g., "Boeing" | 
+| `category` | String (enum) | Widebody | Narrowbody | Regional | Turboprop | Private Jet | Freighter | Supersonic | 
 | `seating_capacity` | Integer | Max seats | 
 | `avg_fuel_burn_kg_per_km` | Float | Cruise-phase fuel burn rate; used to derive route-level emissions (see modeling note below) | 
 | `max_range_km` | Integer | Operational range | 
-| `co2_emission_factor_kg_per_km` | Float | Kg $CO_2$ per km, used in eco-routing weight | 
+| `engine_count` | Integer | Number of engines, inferred from the model name | 
+
+*$CO_2$ is not stored on `:Aircraft`. It is derived in Cypher as `avg_fuel_burn_kg_per_km` × 3.16, where 3.16 kg of $CO_2$ per kg of jet fuel burned is a global constant.*
 
 **:Engine** (new - sourced from the ICAO Aircraft Engine Emissions Databank ges.csv; unique constraint on `engine_uid`)
 
@@ -134,10 +137,11 @@ The scope of this project encompasses the design and implementation of a directe
 | `actual_departure` (new) | DateTime | Recorded actual departure - nullable until the flight departs | 
 | `actual_arrival` (new) | DateTime | Recorded actual arrival - nullable until the flight lands | 
 | `delay_minutes` (new) | Integer | `duration(actual_departure - scheduled_departure)`, in minutes - the actual quantitative measure of disruption impact per flight | 
-| `status` | String (enum) | SCHEDULED | DELAYED | CANCELLED | DIVERTED | COMPLETED | 
+| `status` | String (enum) | SCHEDULED | DELAYED | CANCELLED | DIVERTED | COMPLETED - DELAYED means departure ≥ 15 min late (the BTS on-time definition) | 
 | `distance_km` | Float | Great-circle distance flown | 
 | `duration_min` | Integer | Scheduled flight duration | 
-| `base_fare_usd` | Float | Reference fare for cost-weighted routing | 
+| `base_fare_usd` | Float | Reference fare for cost-weighted routing (same synthetic distance-based fare as `ROUTE.weight_cost`) | 
+| `data_source` (new) | String (enum) | BTS_2015 | SYNTHETIC - BTS_2015 are real US domestic flights from January 2015 (Kaggle "2015 Flight Delays and Cancellations"). SYNTHETIC flights (India and the rest of the world) use real routes, carriers and aircraft, with schedules and delay/cancellation outcomes sampled from the real data | 
 
 *The `(:Flight)` entity is modeled as a distinct node rather than a simple relationship using the reified entity pattern, allowing each scheduled service to maintain its own identity, schedule, and operational status. While historical flight instances track quantitative disruption metrics like actual delay times, direct `[:ROUTE]` relationships connect airport pairs with precomputed time and carbon weights. This dual-layer architecture separates transactional schedule data from pathfinding edges, enabling Neo4j Graph Data Science (GDS) algorithms to traverse the network efficiently without traversing through individual flight schedules.*
 
@@ -151,6 +155,7 @@ The scope of this project encompasses the design and implementation of a directe
 | `start_time` | DateTime | When the disruption began | 
 | `end_time` | DateTime | When it was resolved (nullable while ongoing) | 
 | `description` | String | Free-text summary | 
+| `data_source` (new) | String (enum) | BTS_2015 | SYNTHETIC - BTS_2015 events are detected from real cancellation spikes (an airport-day where ≥ 30 departures and ≥ 25% of departures were cancelled for weather or air-traffic-system reasons, merged across consecutive days). Example: Winter Storm Juno, 26–28 Jan 2015 | 
 
 #### 2.2 Directed Relationships & Properties:
 
@@ -161,7 +166,7 @@ The scope of this project encompasses the design and implementation of a directe
 | `(:Flight)-[:ARRIVES_AT]->(:Airport)` | Flight → Airport | N:1 |  | Destination linkage | 
 | `(:Flight)-[:USES_AIRCRAFT]->(:Aircraft)` | Flight → Aircraft | N:1 | `tail_number` (String) | Specific tail assigned to type | 
 | `(:Airport)-[:ROUTE]->(:Airport)` | Origin → Destination | M:N | *see below* | Primary edge for pathfinding & GDS algorithms | 
-| `(:Airport)-[:HUB_OF]->(:Airline)` | Airport → Airline | M:N | `since` (Date) | Identifies hub airports per carrier for resilience analysis | 
+| `(:Airport)-[:HUB_OF]->(:Airline)` | Airport → Airline | M:N | `since` (Date, unset: no source data) | Identifies hub airports per carrier for resilience analysis. Derived from route data: an airline's top 5 origin airports that each have ≥ 5 routes and ≥ 30% of the busiest origin's route count | 
 | `(:Aircraft)-[:POWERED_BY]->(:Engine)` (new) | Aircraft → Engine | M:N | `is_default_engine` (Boolean) | Links an aircraft type to its certified engine option(s). One type can be offered with several engine choices, and one engine variant can power several aircraft types. | 
 | `(:DisruptionEvent)-[:AFFECTS]->(:Airport)` (new) | Event → Airport | M:N |  | Historical/audit link from a logged disruption event to every airport it impacted | 
 
@@ -172,14 +177,21 @@ The scope of this project encompasses the design and implementation of a directe
 | `distance_km` | Float | Great-circle distance | 
 | `avg_duration_min` | Integer | Average scheduled flight time on this corridor | 
 | `avg_speed_kmh` | Float | Derived operational metric | 
-| `fuel_burn_estimate_kg` | Float | `distance_km` × `avg_fuel_burn_kg_per_km` (aircraft-weighted average) | 
-| `co2_emissions_kg` | Float | `fuel_burn_estimate_kg` × `emission_factor` - drives eco-routing | 
+| `fuel_burn_estimate_kg` | Float | `distance_km` × `avg_fuel_burn_kg_per_km` + one landing/take-off (LTO) cycle, averaged over the route's aircraft mix. LTO fuel = the default engine's ICAO `fuel_lto_cycle_kg` × `engine_count` (via `POWERED_BY`). Charging it once per leg means every extra stop costs carbon. | 
+| `co2_emissions_kg` | Float | `fuel_burn_estimate_kg` × 3.16 (kg $CO_2$ per kg jet fuel) - total per flight | 
+| `co2_per_seat_kg` (new) | Float | $CO_2$ ÷ `seating_capacity`, averaged over the aircraft mix - what eco-routing minimises | 
 | `weight_time` | Float | Normalized weight for fastest-path queries (= `avg_duration_min`) | 
-| `weight_carbon` | Float | Normalized weight for greenest-path queries (= `co2_emissions_kg`) | 
-| `weight_cost` | Float | Normalized weight for cost-optimized queries | 
+| `weight_carbon` | Float | Normalized weight for greenest-path queries (= `co2_per_seat_kg`) | 
+| `weight_cost` | Float | Normalized weight for cost-optimized queries (synthetic fare: 50 + 0.10 × `distance_km` USD, since no fare data is available) | 
+| `aircraft_types` (new) | List of String | `aircraft_type_id`s believed to fly this route (passenger types only) | 
+| `carriers` (new) | List of String | IATA codes of airlines serving the route | 
+| `fuel_burn_source` (new) | String (enum) | EQUIPMENT_AIRLINE | EQUIPMENT_ROUTE | CARRIER_FLEET | DISTANCE_BAND - how `aircraft_types` was determined, from most to least direct evidence | 
+| `duration_estimated` (new) | Boolean | True when the source duration was missing or physically impossible and a fitted block-time model (46.2 + 0.0725 × km minutes) was used | 
 | `corridor_status` | String (enum) | ACTIVE | DISRUPTED | CLOSED - toggled for outage simulation without deleting the edge | 
 | `congestion_index` | Float (0-1) | Real-time load factor, usable as a tie-breaker weight | 
 | `last_updated` | DateTime | Freshness marker for operational data | 
+
+*Why per seat: total $CO_2$ per flight makes small aircraft look greenest. A 70-seat turboprop "beats" a 300-seat widebody on the same route even though it emits more per passenger. Minimising $CO_2$ per seat gives the greenest path for one traveller, the same basis as ICAO's carbon calculator.*
 
 *This soft-state design (`operational_status` on `:Airport`, `corridor_status` on `ROUTE`) is what makes dynamic disruption simulation possible: an outage is simulated by flipping a property, and every downstream Cypher/GDS query that filters on 'ACTIVE' immediately reflects the new topology—no nodes or edges are destroyed, so the disruption is fully reversible and auditable.*
 
@@ -239,10 +251,11 @@ The scope of this project encompasses the design and implementation of a directe
       "aircraft_type_id": "B77W",
       "model": "Boeing 777-300ER",
       "manufacturer": "Boeing",
+      "category": "Widebody",
       "seating_capacity": 296,
       "avg_fuel_burn_kg_per_km": 7.8,
       "max_range_km": 13650,
-      "co2_emission_factor_kg_per_km": 24.6
+      "engine_count": 2
     }
   },
   {
@@ -284,7 +297,7 @@ The scope of this project encompasses the design and implementation of a directe
 | `BA178-20260822` (Flight) | `DEPARTS_FROM` | `JFK` (Airport) |  | 
 | `BA178-20260822` (Flight) | `ARRIVES_AT` | `LHR` (Airport) |  | 
 | `BA178-20260822` (Flight) | `USES_AIRCRAFT` | `B77W` (Aircraft) | `tail_number`: "G-STBC" | 
-| `JFK` (Airport) | `ROUTE` | `LHR` (Airport) | `distance_km`: 5555, `weight_time`: 415, `weight_carbon`: 136653, `weight_cost`: 620.0, `corridor_status`: "ACTIVE" | 
+| `JFK` (Airport) | `ROUTE` | `LHR` (Airport) | `distance_km`: 5555, `weight_time`: 415, `weight_carbon`: 296.68, `weight_cost`: 605.5, `corridor_status`: "ACTIVE" | 
 | `LHR` (Airport) | `HUB_OF` | `BA` (Airline) | `since`: 1974-01-01 | 
 | `B77W` (Aircraft) | `POWERED_BY` | `7GE099` (Engine) | `is_default_engine`: true | 
 | `EVT-2026-0822-01` (DisruptionEvent) | `AFFECTS` | `LHR` (Airport) |  | 

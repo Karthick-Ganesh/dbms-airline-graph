@@ -1,0 +1,109 @@
+aircraft_id,Manufacturer,Model,Category,Typical Capacity,Max Capacity,Range (KM)
+BCS1,Airbus,A220-100,Narrowbody,110,135,6390
+BCS3,Airbus,A220-300,Narrowbody,130,160,6297
+A318,Airbus,A318,Narrowbody,107,132,5740
+A319,Airbus,A319,Narrowbody,124,156,6950
+A19N,Airbus,A319neo,Narrowbody,140,160,6850
+A320,Airbus,A320,Narrowbody,150,180,6100
+A20N,Airbus,A320neo,Narrowbody,165,195,6300
+A321,Airbus,A321,Narrowbody,185,220,5950
+A21N,Airbus,A321neo,Narrowbody,206,244,7400
+A321,Airbus,A321LR,Narrowbody,206,244,7400
+A321,Airbus,A321XLR,Narrowbody,206,244,8700
+A332,Airbus,A330-200,Widebody,246,406,13450
+A333,Airbus,A330-300,Widebody,277,440,11750
+A338,Airbus,A330-800neo,Widebody,257,406,15094
+A339,Airbus,A330-900neo,Widebody,287,440,13334
+A343,Airbus,A340-300,Widebody,277,440,13500
+A346,Airbus,A340-600,Widebody,326,475,14450
+A359,Airbus,A350-900,Widebody,315,440,15372
+A35K,Airbus,A350-1000,Widebody,369,480,16112
+A388,Airbus,A380-800,Widebody,525,853,14800
+A306,Airbus,A300-600,Widebody,266,345,7500
+A310,Airbus,A310-300,Widebody,220,280,9540
+B712,Boeing,717-200,Narrowbody,106,134,3815
+B733,Boeing,737-300,Narrowbody,128,149,4176
+B734,Boeing,737-400,Narrowbody,146,188,3815
+B735,Boeing,737-500,Narrowbody,108,132,4398
+B736,Boeing,737-600,Narrowbody,108,130,5970
+B737,Boeing,737-700,Narrowbody,128,149,6230
+B738,Boeing,737-800,Narrowbody,160,189,5765
+B739,Boeing,737-900ER,Narrowbody,177,215,5460
+B37M,Boeing,737 MAX 7,Narrowbody,138,172,7130
+B38M,Boeing,737 MAX 8,Narrowbody,162,210,6570
+B39M,Boeing,737 MAX 9,Narrowbody,178,220,6570
+B3XM,Boeing,737 MAX 10,Narrowbody,188,230,6110
+B752,Boeing,757-200,Narrowbody,200,239,7222
+B753,Boeing,757-300,Narrowbody,243,295,6287
+B763,Boeing,767-300ER,Widebody,218,350,11070
+B764,Boeing,767-400ER,Widebody,245,375,10415
+B772,Boeing,777-200ER,Widebody,313,440,13080
+B77L,Boeing,777-200LR,Widebody,317,440,15843
+B77W,Boeing,777-300ER,Widebody,396,550,13649
+B778,Boeing,777-8,Widebody,384,500,16170
+B779,Boeing,777-9,Widebody,426,500,13500
+B788,Boeing,787-8,Widebody,242,359,13620
+B789,Boeing,787-9,Widebody,290,406,14140
+B78X,Boeing,787-10,Widebody,330,440,11910
+B744,Boeing,747-400,Widebody,416,660,13450
+B748,Boeing,747-8I,Widebody,467,605,14320
+B722,Boeing,727-200,Narrowbody,134,155,4450
+B732,Boeing,737-200,Narrowbody,102,136,3440
+E135,Embraer,ERJ-135,Regional,37,37,3243
+E140,Embraer,ERJ-140,Regional,44,44,3056
+E145,Embraer,ERJ-145,Regional,50,50,2873
+E170,Embraer,E170,Regional,66,78,3982
+E75L,Embraer,E175,Regional,76,88,4074
+E190,Embraer,E190,Regional,96,114,4537
+E195,Embraer,E195,Regional,100,124,4260
+E752,Embraer,E175-E2,Regional,80,90,3704
+E902,Embraer,E190-E2,Regional,97,114,5278
+E952,Embraer,E195-E2,Regional,120,146,4815
+E120,Embraer,EMB 120 Brasilia,Turboprop,30,30,1750
+CRJ1,Bombardier,CRJ-100,Regional,50,50,3000
+CRJ2,Bombardier,CRJ-200,Regional,50,50,3148
+CRJ7,Bombardier,CRJ-700,Regional,70,78,2553
+CRJ9,Bombardier,CRJ-900,Regional,90,90,2876
+CRJX,Bombardier,CRJ-1000,Regional,100,104,3004
+AT45,ATR,ATR 42-500,Turboprop,48,50,1326
+AT46,ATR,ATR 42-600,Turboprop,48,50,1326
+AT75,ATR,ATR 72-500,Turboprop,68,74,1500
+AT76,ATR,ATR 72-600,Turboprop,70,78,1528
+DH8A,De Havilland,Dash 8-100,Turboprop,37,39,1889
+DH8B,De Havilland,Dash 8-200,Turboprop,37,39,1713
+DH8C,De Havilland,Dash 8-300,Turboprop,50,56,1558
+DH8D,De Havilland,Dash 8-400 (Q400),Turboprop,78,90,2040
+ARJ2,Comac,ARJ21-700,Regional,78,90,3700
+C919,Comac,C919,Narrowbody,158,192,5555
+SU95,Sukhoi,Superjet 100,Regional,87,108,3048
+C208,Cessna,208 Caravan,Turboprop,9,14,1982
+C750,Cessna,Citation X,Private Jet,8,12,6408
+MD82,McDonnell Douglas,MD-82,Narrowbody,155,172,3800
+MD83,McDonnell Douglas,MD-83,Narrowbody,155,172,4635
+MD87,McDonnell Douglas,MD-87,Narrowbody,130,139,4390
+MD88,McDonnell Douglas,MD-88,Narrowbody,155,172,4720
+MD90,McDonnell Douglas,MD-90,Narrowbody,153,172,3860
+DC10,McDonnell Douglas,DC-10-30,Widebody,270,380,10010
+MD11,McDonnell Douglas,MD-11,Widebody,298,410,12633
+DC93,McDonnell Douglas,DC-9-30,Narrowbody,115,127,3090
+F70,Fokker,Fokker 70,Regional,72,85,3410
+F100,Fokker,Fokker 100,Regional,97,122,3170
+F50,Fokker,Fokker 50,Turboprop,50,58,2055
+SF34,Saab,Saab 340,Turboprop,34,36,1732
+SB20,Saab,Saab 2000,Turboprop,50,58,2869
+D328,Dornier,Do 328,Turboprop,30,33,1850
+J328,Dornier,Do 328JET,Regional,30,33,2740
+A148,Antonov,An-148,Regional,75,85,2100
+A158,Antonov,An-158,Regional,89,99,2500
+A124,Antonov,An-124 Ruslan,Freighter,0,0,3700
+IL96,Ilyushin,Il-96-300,Widebody,262,300,11500
+T204,Tupolev,Tu-204,Narrowbody,196,210,4300
+B462,British Aerospace,BAe 146-200,Regional,85,100,2900
+RJ85,British Aerospace,Avro RJ85,Regional,85,100,2960
+RJ1H,British Aerospace,Avro RJ100,Regional,100,112,2760
+B190,Beechcraft,1900D,Turboprop,19,19,700
+PC12,Pilatus,PC-12,Turboprop,9,9,2804
+CONC,Aerospatiale/BAC,Concorde,Supersonic,100,128,7222
+L101,Lockheed,L-1011 TriStar,Widebody,256,400,5300
+GLF6,Gulfstream,G650,Private Jet,13,19,12960
+A225,Antonov,An-225 Mriya,Freighter,0,0,4000
