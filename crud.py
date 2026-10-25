@@ -166,7 +166,7 @@ def list_aircraft(driver):
         MATCH (ac:Aircraft)
         RETURN ac.aircraft_type_id AS aircraft_type_id, ac.model AS model,
                ac.manufacturer AS manufacturer, ac.category AS category,
-               ac.seating_capacity AS seats
+               ac.typical_seats AS seats, ac.seating_capacity AS max_seats
         ORDER BY ac.manufacturer, ac.model
         """)
 

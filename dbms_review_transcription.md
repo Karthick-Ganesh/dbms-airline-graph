@@ -106,8 +106,9 @@ The scope of this project encompasses the design and implementation of a directe
 | `model` | String | e.g., "Boeing 777-300ER" | 
 | `manufacturer` | String | e.g., "Boeing" | 
 | `category` | String (enum) | Widebody | Narrowbody | Regional | Turboprop | Private Jet | Freighter | Supersonic | 
-| `seating_capacity` | Integer | Max seats | 
-| `avg_fuel_burn_kg_per_km` | Float | Cruise-phase fuel burn rate; used to derive route-level emissions (see modeling note below) | 
+| `seating_capacity` | Integer | Certified maximum seats (from the dataset) | 
+| `typical_seats` | Integer | Seats in a typical airline layout: `seating_capacity` × a category factor (widebody 0.65, narrowbody 0.90, regional/turboprop 0.92); per-seat CO2 uses this | 
+| `avg_fuel_burn_kg_per_km` | Float | Cruise-phase fuel burn rate: a seeded per-seat efficiency for the category (e.g. widebody 0.019–0.028 kg per seat-km) × `typical_seats`, so it scales with aircraft size; used to derive route-level emissions (see modeling note below) | 
 | `max_range_km` | Integer | Operational range | 
 | `engine_count` | Integer | Number of engines, inferred from the model name | 
 
@@ -179,7 +180,7 @@ The scope of this project encompasses the design and implementation of a directe
 | `avg_speed_kmh` | Float | Derived operational metric | 
 | `fuel_burn_estimate_kg` | Float | `distance_km` × `avg_fuel_burn_kg_per_km` + one landing/take-off (LTO) cycle, averaged over the route's aircraft mix. LTO fuel = the default engine's ICAO `fuel_lto_cycle_kg` × `engine_count` (via `POWERED_BY`). Charging it once per leg means every extra stop costs carbon. | 
 | `co2_emissions_kg` | Float | `fuel_burn_estimate_kg` × 3.16 (kg $CO_2$ per kg jet fuel) - total per flight | 
-| `co2_per_seat_kg` (new) | Float | $CO_2$ ÷ `seating_capacity`, averaged over the aircraft mix - what eco-routing minimises | 
+| `co2_per_seat_kg` (new) | Float | $CO_2$ ÷ `typical_seats`, averaged over the aircraft mix - what eco-routing minimises | 
 | `weight_time` | Float | Normalized weight for fastest-path queries (= `avg_duration_min`) | 
 | `weight_carbon` | Float | Normalized weight for greenest-path queries (= `co2_per_seat_kg`) | 
 | `weight_cost` | Float | Normalized weight for cost-optimized queries (synthetic fare: 50 + 0.10 × `distance_km` USD, since no fare data is available) | 
@@ -252,8 +253,9 @@ The scope of this project encompasses the design and implementation of a directe
       "model": "Boeing 777-300ER",
       "manufacturer": "Boeing",
       "category": "Widebody",
-      "seating_capacity": 296,
-      "avg_fuel_burn_kg_per_km": 7.8,
+      "seating_capacity": 550,
+      "typical_seats": 358,
+      "avg_fuel_burn_kg_per_km": 7.24,
       "max_range_km": 13650,
       "engine_count": 2
     }

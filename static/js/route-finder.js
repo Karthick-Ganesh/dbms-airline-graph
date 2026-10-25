@@ -1,7 +1,8 @@
 // Route finder: GET /api/routes/find and draw every option on the map.
 (() => {
   const EXAMPLES = [["DEL", "JFK"], ["BOM", "SFO"], ["BLR", "LHR"], ["MAA", "SYD"], ["IXL", "LIS"]];
-  const COLOR_TOKEN = { fastest: "--route-fastest", greenest: "--route-greenest", shortest: "--route-shortest" };
+  const COLOR_TOKEN = { fastest: "--route-fastest", greenest: "--route-greenest", shortest: "--route-shortest",
+                        unconstrained: "--route-before" };
 
   const $ = s => document.querySelector(s);
   let map, layers = [], labels = [], selected = null, result = null;
@@ -37,7 +38,8 @@
   }
 
   // Short algorithm names for the ticket strip (full text is the strip's tooltip).
-  const SHORT_ALGO = { fastest: "Dijkstra · time", greenest: "Dijkstra · CO₂", shortest: "A* · distance" };
+  const SHORT_ALGO = { fastest: "Least time", greenest: "Least CO₂ in limit", shortest: "Least km in limit",
+                       unconstrained: "GDS Dijkstra" };
 
   const stubRow = (label, value) =>
     `<div class="stub-row"><span class="field-label">${label}</span><span class="v">${value}</span></div>`;
@@ -62,13 +64,14 @@
     const stops = option.path.length - 2;
     return `<div class="ticket option" data-key="${option.key}" style="--option-color:${color}" tabindex="0">
       <div class="ticket-main">
-        <div class="ticket-strip" title="${App.esc(option.algorithm)}"><span>${App.esc(option.label)}</span><span class="algo">${SHORT_ALGO[option.key] || "Yen's k-shortest"}</span></div>
+        <div class="ticket-strip" title="${App.esc(option.algorithm)}"><span>${App.esc(option.label)}</span><span class="algo">${SHORT_ALGO[option.key] || "Next fastest"}</span></div>
         <div class="ticket-body">
           <div class="route-codes">${option.path.map(App.esc).join(HOP)}</div>
           <div class="route-cities">${App.esc(city(option.path[0]))} to ${App.esc(city(option.path[option.path.length - 1]))}
             · ${stops ? `${stops} stop${stops > 1 ? "s" : ""} via ${App.esc(option.path.slice(1, -1).map(city).join(", "))}` : "nonstop"}</div>
           ${twin ? `<div class="note">Same itinerary as ${App.esc(twin.label)}</div>` : ""}
           ${delta(option, all[0])}
+          ${option.key === "unconstrained" ? unbookable(option) : ""}
           <details class="legs"><summary>Legs</summary>
             <div class="table-wrap"><table>
               <thead><tr><th>Leg</th><th class="num">Time</th><th class="num">km</th><th class="num">kg CO₂</th><th>Carriers</th></tr></thead>
@@ -88,9 +91,29 @@
     </div>`;
   }
 
+  /** Why the unconstrained optimum isn't offered as a bookable itinerary. */
+  function unbookable(option) {
+    const L = result.limits, why = [];
+    const stops = option.flights - 1;
+    if (stops > L.max_stops) why.push(`${stops} stops (limit ${L.max_stops})`);
+    if (L.fastest_min != null && option.journey_minutes > L.fastest_min + L.max_extra_min)
+      why.push(`${App.minutes(option.journey_minutes - L.fastest_min)} longer than the fastest (limit +${App.minutes(L.max_extra_min)})`);
+    return `<div class="note">${why.length ? "Not bookable under your limits: " + why.join(", ")
+      : "Outside the 2× detour search area"}. Shown for comparison.</div>`;
+  }
+
+  function limitsLine() {
+    const L = result.limits;
+    if (!L.candidates) return `<p class="delta worse">No itinerary with at most ${L.max_stops} stop${L.max_stops === 1 ? "" : "s"}
+      between these airports. Allow more stops, or see the unconstrained optimum below.</p>`;
+    return `<p class="small muted" style="margin:0">Bookable itineraries only: at most ${L.max_stops} stop${L.max_stops === 1 ? "" : "s"};
+      greenest and shortest within <strong>+${App.minutes(L.max_extra_min)}</strong> of the fastest
+      (${App.number(L.candidates)} itineraries checked, ${App.number(L.within_limit)} within the limit).</p>`;
+  }
+
   function headline(options) {
     const [fast, green] = options;
-    if (!fast.path.length) return "";
+    if (!fast?.path.length) return "";
     if (samePath(fast, green)) return `<p>The fastest itinerary is also the greenest.</p>`;
     const saved = fast.co2_per_seat_kg - green.co2_per_seat_kg;
     const pct = 100 * saved / fast.co2_per_seat_kg;
@@ -100,16 +123,17 @@
   }
 
   function render() {
-    const { options, alternatives, airports } = result;
-    const all = [...options, ...alternatives];
+    const { options, alternatives, airports, unconstrained } = result;
+    const all = [...options, ...alternatives, ...(unconstrained ? [unconstrained] : [])];
     $("#results").innerHTML = `
       <div class="card"><h2>${App.esc(result.src)} → ${App.esc(result.dst)} · Itinerary summary</h2>${headline(options)}
-        <p class="small muted" style="margin:0">Journey time is the scheduled flight time plus 90 minutes for each connection.
+        ${limitsLine()}
+        <p class="small muted" style="margin: var(--space-2) 0 0">Journey time is the scheduled flight time plus 90 minutes for each connection.
         CO₂ per seat includes one take-off/landing cycle per leg.</p></div>
-      <div class="section-label">Optimised routes</div>
-      ${options.map(o => card(o, all, airports)).join("")}
-      <div class="section-label">Alternatives (Yen's k-shortest, by time)</div>
-      ${alternatives.length ? alternatives.map(o => card(o, all, airports)).join("") : '<div class="card empty small">No alternative itineraries.</div>'}`;
+      ${options.length ? `<div class="section-label">Optimised routes</div>${options.map(o => card(o, all, airports)).join("")}` : ""}
+      ${options.length ? `<div class="section-label">Alternatives (next fastest)</div>
+        ${alternatives.length ? alternatives.map(o => card(o, all, airports)).join("") : '<div class="card empty small">No other itineraries within the limits.</div>'}` : ""}
+      ${unconstrained ? `<div class="section-label">For comparison · unconstrained optimum</div>${card(unconstrained, all, airports)}` : ""}`;
 
     layers.forEach(l => l.remove());
     labels.forEach(l => l.remove());
@@ -118,9 +142,9 @@
     // Draw back to front: alternatives first, fastest on top.
     [...all].reverse().forEach(o => {
       const twin = all.find(x => x !== o && samePath(x, o) && all.indexOf(x) < all.indexOf(o));
+      const minor = o.key.startsWith("alt") || o.key === "unconstrained";
       const group = RouteMap.drawPath(stopsOf(o, airports), {
-        color: colorOf(o), weight: o.key.startsWith("alt") ? 3 : 4,
-        dashArray: twin || o.key.startsWith("alt") ? "6 8" : null,
+        color: colorOf(o), weight: minor ? 3 : 4, dashArray: twin || minor ? "6 8" : null,
       });
       group.key = o.key;
       group.addTo(map);
@@ -161,10 +185,11 @@
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Searching…';
     try {
-      result = await App.api(`/api/routes/find?src=${src}&dst=${dst}`);
+      const stops = $("#stops").value, extra = $("#extra").value;
+      result = await App.api(`/api/routes/find?src=${src}&dst=${dst}&max_stops=${stops}${extra ? `&max_extra=${extra}` : ""}`);
       from.set(src, result.airports[src]?.city);
       to.set(dst, result.airports[dst]?.city);
-      history.replaceState(null, "", `?from=${src}&to=${dst}`);
+      history.replaceState(null, "", `?from=${src}&to=${dst}&stops=${stops}${extra ? `&extra=${extra}` : ""}`);
       render();
     } catch (e) {
       App.toast(e.message, "error");
@@ -189,7 +214,14 @@
     });
     $("#search").addEventListener("submit", e => { e.preventDefault(); search(from.get(), to.get()); });
 
+    // Changing a limit re-runs the current search.
+    ["#stops", "#extra"].forEach(sel => $(sel).addEventListener("change", () => {
+      if (result) search(result.src, result.dst);
+    }));
+
     const params = new URLSearchParams(location.search);
+    if (params.get("stops")) $("#stops").value = params.get("stops");
+    if (params.get("extra")) $("#extra").value = params.get("extra");
     if (params.get("from") && params.get("to")) search(params.get("from").toUpperCase(), params.get("to").toUpperCase());
   });
 })();

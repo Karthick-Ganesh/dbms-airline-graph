@@ -69,5 +69,5 @@ Run the seed scripts in order. Each is idempotent (MERGE on unique keys), and ea
 ## Data notes
 
 - **Real vs synthetic:** each `Flight` and `DisruptionEvent` has `data_source` = `BTS_2015` (real US flights, January 2015, including Winter Storm Juno) or `SYNTHETIC` (India and the rest of the world: real routes, carriers and aircraft, with schedules and delays sampled from the real data).
-- **Synthetic values:** `avg_fuel_burn_kg_per_km` (aircraft), `weight_cost` (a distance-based fare) and `fleet_size` are generated with fixed random seeds, so every run gives the same values.
+- **Synthetic values:** `avg_fuel_burn_kg_per_km` (aircraft: a per-seat efficiency for the category × typical seats), `weight_cost` (a distance-based fare) and `fleet_size` are generated with fixed random seeds, so every run gives the same values. Per-seat CO2 uses `typical_seats` (a typical airline layout), not the certified maximum.
 - **Route aircraft:** a ROUTE's `aircraft_types` comes from the most direct evidence available, recorded in `fuel_burn_source`. It is either the airline's recorded equipment on that route, any airline's on that airport pair, the carrier's fleet on similar distances, or a distance band.

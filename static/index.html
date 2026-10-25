@@ -16,8 +16,9 @@
   <main class="page">
     <div class="page-header">
       <h1>Route Finder</h1>
-      <p>Compare the fastest, greenest and shortest itineraries between two airports, computed with
-        GDS Dijkstra, A* and Yen's k-shortest paths on the live (ACTIVE) route network.</p>
+      <p>Compare the fastest, greenest and shortest itineraries you could actually book: at most two stops, and a
+        greener trip only if it isn't too much longer. Found by an exact Cypher path search on the live (ACTIVE)
+        route network, with GDS Dijkstra's unconstrained optimum shown for comparison.</p>
     </div>
 
     <form class="card" id="search">
@@ -35,6 +36,27 @@
           <input id="to" placeholder="City, airport or code" required>
         </div>
         <button class="btn btn-search" id="go">Find routes</button>
+      </div>
+      <div class="limits">
+        <div class="field">
+          <label for="stops">Stops</label>
+          <select id="stops">
+            <option value="0">Nonstop only</option>
+            <option value="1">Up to 1 stop</option>
+            <option value="2" selected>Up to 2 stops</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="extra">Extra time allowed for a greener trip</label>
+          <select id="extra">
+            <option value="" selected>Auto: 75% of the fastest (under 15 h), 50% above, max 10 h</option>
+            <option value="60">Up to +1 h</option>
+            <option value="120">Up to +2 h</option>
+            <option value="240">Up to +4 h</option>
+            <option value="360">Up to +6 h</option>
+            <option value="600">Up to +10 h</option>
+          </select>
+        </div>
       </div>
       <div class="perf"></div>
       <div class="examples">

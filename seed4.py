@@ -225,7 +225,7 @@ class AircraftPicker:
 
     def __init__(self, eq, route_types, aircraft, rng):
         self.eq, self.route_types, self.rng = eq, route_types, rng
-        self.passenger = {k for k, a in aircraft.items() if a["seating_capacity"] > 0}
+        self.passenger = {k for k, a in aircraft.items() if a["typical_seats"] > 0}
         self.by_tail = {}
         self.fleets = {}
 

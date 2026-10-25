@@ -9,6 +9,7 @@ ADMIN_USER, ADMIN_PASSWORD and SESSION_SECRET (signs the session cookie).
 Every write that can change the ACTIVE network re-projects the GDS graph.
 """
 
+import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -28,6 +29,7 @@ import traffic
 from seed import ROOT, _load_dotenv, neo4j_driver
 
 _load_dotenv()
+log = logging.getLogger("uvicorn.error")
 
 AirportStatus = Literal["ACTIVE", "RESTRICTED", "CLOSED"]
 CorridorStatus = Literal["ACTIVE", "DISRUPTED", "CLOSED"]
@@ -45,6 +47,8 @@ async def lifespan(app):
         traffic.warm(app.state.driver)
     except ServiceUnavailable:
         pass  # Neo4j not started yet: requests fail with 503 until it is.
+    except Neo4jError as e:  # e.g. out of memory: the projection is retried on first use
+        log.warning("startup projection failed: %s", e.message)
     yield
     app.state.driver.close()
 
@@ -102,10 +106,14 @@ def deleted(result, what):
 
 
 def network_changed(driver):
-    """Rebuild the GDS projection and the live-traffic timetable after a write
-    that changes the ACTIVE network."""
-    queries.project_active_network(driver)
-    traffic.invalidate(driver)
+    """After a write that changes the ACTIVE network, drop the GDS projection
+    and the live-traffic timetable; both rebuild lazily on next use. The write
+    has already committed, so a failure here is logged, not reported."""
+    try:
+        queries.invalidate_projection(driver)
+    except Neo4jError as e:
+        log.warning("could not drop the GDS projection: %s", e.message)
+    traffic.invalidate()
 
 
 # ---------------------------------------------------------------- Auth
@@ -163,14 +171,16 @@ def search_airports(q: str, limit: int = 10, driver=Depends(db)):
 
 
 @app.get("/api/routes/find")
-def find_routes(src: str, dst: str, k: int = Query(3, ge=1, le=5), driver=Depends(db)):
+def find_routes(src: str, dst: str, k: int = Query(3, ge=1, le=5), max_stops: int = Query(2, ge=0, le=2),
+                max_extra: Optional[int] = Query(None, ge=0, le=queries.MAX_EXTRA_MIN), driver=Depends(db)):
+    """Bookable itineraries; max_extra (minutes) overrides the automatic extra-time rule."""
     src, dst = src.upper(), dst.upper()
     for code in (src, dst):
         airport = found(crud.get_airport(driver, code), f"Airport {code}")
         if airport["airport"]["operational_status"] != "ACTIVE":
             raise HTTPException(409, f"{code} is {airport['airport']['operational_status']}: "
                                      "restore it in the Disruption Simulator first")
-    return queries.find_routes(driver, src, dst, k)
+    return queries.find_routes(driver, src, dst, k, max_stops, max_extra)
 
 
 # ---------------------------------------------------------------- Graph explorer
@@ -543,7 +553,7 @@ def delete_event(event_id: str, driver=Depends(db)):
     if event["event"].get("data_source") != "MANUAL":
         raise HTTPException(409, "Only manually created events can be deleted")
     queries.restore_disruption(driver, event_id)  # reopen anything it still holds closed
-    traffic.invalidate(driver)
+    traffic.invalidate()
     return deleted(crud.delete_event(driver, event_id), f"Event {event_id}")
 
 
@@ -553,7 +563,7 @@ def simulate_disruption(body: DisruptionIn, driver=Depends(db)):
         raise HTTPException(422, "Choose at least one airport or a region")
     result = queries.simulate_disruption(driver, [a.upper() for a in body.airports], body.region or None,
                                          body.severity, body.event_type, body.description or None)
-    traffic.invalidate(driver)
+    traffic.invalidate()
     return result
 
 
@@ -561,7 +571,7 @@ def simulate_disruption(body: DisruptionIn, driver=Depends(db)):
 def restore_disruption(event_id: str, driver=Depends(db)):
     found(crud.get_event(driver, event_id), f"Event {event_id}")
     result = queries.restore_disruption(driver, event_id)
-    traffic.invalidate(driver)
+    traffic.invalidate()
     return result
 
 

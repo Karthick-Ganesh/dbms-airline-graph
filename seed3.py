@@ -227,7 +227,7 @@ def read_equipment(iata_to_icao, airports, path=ROUTES_CSV_FILE):
 def build_routes(json_routes, airports, aircraft, eq, lto=None):
     """Return (ROUTE rows, stats Counter)."""
     lto = lto or lto_fuel_by_aircraft(aircraft)
-    passenger = {k: a for k, a in aircraft.items() if a["seating_capacity"] > 0}
+    passenger = {k: a for k, a in aircraft.items() if a["typical_seats"] > 0}
     rng = random.Random(CONGESTION_SEED)
     stats = Counter()
     rows = []
@@ -275,7 +275,7 @@ def build_routes(json_routes, airports, aircraft, eq, lto=None):
         leg_fuel = {t: km * passenger[t]["avg_fuel_burn_kg_per_km"] + lto[t] for t in mix}
         fuel_kg = sum(leg_fuel.values()) / len(mix)
         co2_per_seat = sum(
-            leg_fuel[t] * CO2_KG_PER_KG_FUEL / passenger[t]["seating_capacity"] for t in mix
+            leg_fuel[t] * CO2_KG_PER_KG_FUEL / passenger[t]["typical_seats"] for t in mix
         ) / len(mix)
         fare = FARE_BASE_USD + FARE_PER_KM_USD * km
 

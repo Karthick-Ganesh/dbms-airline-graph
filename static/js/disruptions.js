@@ -28,6 +28,7 @@
     if (!src || !dst) return null;
     try {
       const r = await App.api(`/api/routes/find?src=${src}&dst=${dst}&k=1`);
+      if (!r.options.length) return { error: `No bookable itinerary (at most ${r.limits.max_stops} stops) right now` };
       return { fastest: r.options[0], greenest: r.options[1], airports: r.airports };
     } catch (e) {
       return { error: e.message };
@@ -153,9 +154,9 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     map = RouteMap.create("map");
-    watchFrom.set("BOM", "Mumbai");
-    watchTo.set("JFK", "New York");
-    closing = ["DXB"];
+    watchFrom.set("IXL", "Leh");
+    watchTo.set("LIS", "Lisbon");
+    closing = ["DEL"];   // Leh depends on Delhi: closing it re-routes the fastest trip
     renderClosing();
     refreshWatch();
     loadEvents();

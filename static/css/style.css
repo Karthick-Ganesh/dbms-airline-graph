@@ -620,3 +620,8 @@ input, select { accent-color: var(--pass); }
 .progress { position: relative; height: 4px; margin: var(--space-4) 10px var(--space-2); border-top: 2px dashed var(--border-strong); }
 .progress-fill { position: absolute; left: 0; top: -2px; height: 2px; background: var(--ticket-color); }
 .progress-plane { position: absolute; top: -13px; transform: translateX(-50%); color: var(--ticket-color); font-size: 15px; line-height: 1; }
+
+/* Route search limits (stops, extra time) */
+.limits { display: grid; grid-template-columns: minmax(0, 220px) minmax(0, 1fr); gap: var(--space-4); margin-top: var(--space-3); }
+.limits .field { margin: 0; }
+@media (max-width: 640px) { .limits { grid-template-columns: minmax(0, 1fr); } }

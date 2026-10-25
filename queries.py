@@ -84,6 +84,13 @@ def ensure_projection(driver, graph=ACTIVE_GRAPH):
             return project_active_network(driver, graph)
 
 
+def invalidate_projection(driver, graph=ACTIVE_GRAPH):
+    """Drop the projection after a network change; the next GDS query rebuilds
+    it once (ensure_projection), instead of re-projecting after every write."""
+    with _projection_lock, driver.session() as session:
+        session.run("CALL gds.graph.drop($graph, false) YIELD graphName RETURN graphName", graph=graph).consume()
+
+
 # ---------------------------------------------------------------- Queries
 
 OVERVIEW_NODES = "MATCH (n) RETURN labels(n)[0] AS label, count(*) AS nodes ORDER BY nodes DESC"
@@ -189,9 +196,9 @@ ORDER BY km LIMIT 10
 """, {"center": "MAA", "metres": 300000}),
 
     Query(10, "Carbon efficiency by aircraft category", "Aggregation with the CO2 constant applied in Cypher", """
-MATCH (ac:Aircraft) WHERE ac.seating_capacity > 0
+MATCH (ac:Aircraft) WHERE ac.typical_seats > 0
 WITH ac.category AS category, count(*) AS types,
-     avg(ac.avg_fuel_burn_kg_per_km * 3.16 / ac.seating_capacity * 1000) AS g_co2_per_seat_km
+     avg(ac.avg_fuel_burn_kg_per_km * 3.16 / ac.typical_seats * 1000) AS g_co2_per_seat_km
 RETURN category, types, round(g_co2_per_seat_km, 1) AS g_co2_per_seat_km
 ORDER BY g_co2_per_seat_km
 """),
@@ -252,24 +259,6 @@ CALL gds.shortestPath.dijkstra.stream($graph, {
 RETURN 0 AS index, [n IN gds.util.asNodes(nodeIds) | n.airport_id] AS path
 """
 
-PATH_ASTAR = """
-MATCH (s:Airport {airport_id: $src}), (t:Airport {airport_id: $dst})
-CALL gds.shortestPath.astar.stream($graph, {
-  sourceNode: s, targetNode: t, relationshipWeightProperty: $weight,
-  latitudeProperty: 'latitude', longitudeProperty: 'longitude'
-}) YIELD nodeIds
-RETURN 0 AS index, [n IN gds.util.asNodes(nodeIds) | n.airport_id] AS path
-"""
-
-PATH_YENS = """
-MATCH (s:Airport {airport_id: $src}), (t:Airport {airport_id: $dst})
-CALL gds.shortestPath.yens.stream($graph, {
-  sourceNode: s, targetNode: t, k: $k, relationshipWeightProperty: $weight
-}) YIELD index, nodeIds
-RETURN index, [n IN gds.util.asNodes(nodeIds) | n.airport_id] AS path
-ORDER BY index
-"""
-
 # Each leg of a path: the active ROUTE edge between consecutive stops.
 PATH_LEGS = """
 UNWIND range(0, size($path) - 2) AS i
@@ -290,12 +279,46 @@ RETURN a.airport_id AS code, a.name AS name, a.city AS city, a.country AS countr
        a.location AS location, a.operational_status AS status
 """
 
-# key, label, algorithm, Cypher, weight property
-ROUTE_STRATEGIES = [
-    ("fastest", "Fastest", f"Dijkstra on weight_time + {CONNECTION_MIN} min per connection", PATH_DIJKSTRA, "weight_trip"),
-    ("greenest", "Greenest", "Dijkstra on weight_carbon", PATH_DIJKSTRA, "weight_carbon"),
-    ("shortest", "Shortest distance", "A* on distance_km", PATH_ASTAR, "distance_km"),
+# Bookable itineraries: every nonstop, 1-stop and 2-stop path between two
+# airports over ACTIVE corridors, found exactly by Cypher pattern matching.
+# GDS Dijkstra can't limit the number of stops (it happily chains 3-5 legs for
+# a few kg of CO2), so the route finder enumerates instead: with at most two
+# stops the search space is small. Stops must stay within DETOUR x the direct
+# distance, which prunes hubs on the far side of the world.
+DETOUR = 2.0
+MAX_EXTRA_MIN = 600   # never more than 10 h longer than the fastest
+
+_LEG = "ROUTE {corridor_status: 'ACTIVE'}"
+_NEAR = ("{m}.operational_status = 'ACTIVE' AND "
+         "point.distance({m}.location, s.location) + point.distance({m}.location, t.location) <= budget")
+ITINERARY_PATTERNS = [
+    f"MATCH (s)-[r1:{_LEG}]->(t) RETURN [s.airport_id, t.airport_id] AS path, [r1] AS rs",
+    f"""MATCH (s)-[r1:{_LEG}]->(m1:Airport)-[r2:{_LEG}]->(t)
+    WHERE {_NEAR.format(m="m1")}
+    RETURN [s.airport_id, m1.airport_id, t.airport_id] AS path, [r1, r2] AS rs""",
+    f"""MATCH (s)-[r1:{_LEG}]->(m1:Airport)-[r2:{_LEG}]->(m2:Airport)-[r3:{_LEG}]->(t)
+    WHERE m1 <> t AND m2 <> s AND {_NEAR.format(m="m1")} AND {_NEAR.format(m="m2")}
+    RETURN [s.airport_id, m1.airport_id, m2.airport_id, t.airport_id] AS path, [r1, r2, r3] AS rs""",
 ]
+
+ITINERARIES = """
+MATCH (s:Airport {{airport_id: $src}}), (t:Airport {{airport_id: $dst}})
+WITH s, t, $detour * point.distance(s.location, t.location) AS budget
+CALL (s, t, budget) {{
+  {patterns}
+}}
+RETURN path, size(rs) AS legs,
+       reduce(m = 0, r IN rs | m + r.avg_duration_min) + $connection * (size(rs) - 1) AS journey,
+       reduce(c = 0.0, r IN rs | c + r.co2_per_seat_kg) AS co2,
+       reduce(k = 0.0, r IN rs | k + r.distance_km) AS km
+"""
+
+
+def extra_time_allowed(fastest_min):
+    """How much longer than the fastest a greener/shorter itinerary may be:
+    75% of the fastest journey under 15 h, 50% from 15 h, never over 10 h."""
+    share = 0.75 if fastest_min < 15 * 60 else 0.5
+    return min(MAX_EXTRA_MIN, round(share * fastest_min))
 
 
 def _option(session, key, label, algorithm, path):
@@ -310,28 +333,58 @@ def _option(session, key, label, algorithm, path):
     }
 
 
-def find_routes(driver, src, dst, k=3, graph=ACTIVE_GRAPH):
-    """Fastest, greenest and shortest-distance paths, plus k alternatives.
+def find_routes(driver, src, dst, k=3, max_stops=2, max_extra_min=None, graph=ACTIVE_GRAPH):
+    """Bookable fastest, greenest and shortest itineraries, plus k alternatives.
 
-    Alternatives are Yen's k-shortest paths on weight_trip (flight time plus
-    CONNECTION_MIN per stop) with the fastest one (Yen's rank 1) left out. Returns {"airports", "options",
-    "alternatives"}; a path list is empty when no route exists.
+    Only itineraries with at most `max_stops` stops count, and the greenest and
+    shortest may be at most `max_extra_min` longer than the fastest (default:
+    extra_time_allowed()). Alternatives are the next-fastest bookable ones.
+    "unconstrained" is GDS Dijkstra's greenest path over the whole network,
+    reported when it differs (usually more stops or a far longer trip).
     """
+    max_stops = max(0, min(2, max_stops))
+    cypher = ITINERARIES.format(patterns="\n  UNION ALL\n  ".join(ITINERARY_PATTERNS[:max_stops + 1]))
     options, alternatives = [], []
     with _projection_lock:
         ensure_projection(driver, graph)
         with driver.session() as session:
-            for key, label, algorithm, cypher, weight in ROUTE_STRATEGIES:
-                rows = session.run(cypher, src=src, dst=dst, graph=graph, weight=weight).data()
-                path = rows[0]["path"] if rows else []
-                options.append(_option(session, key, label, algorithm, path))
-            rows = session.run(PATH_YENS, src=src, dst=dst, graph=graph, k=k + 1, weight="weight_trip").data()
-            for row in rows[1:]:
-                alternatives.append(_option(session, f"alt{row['index']}", f"Alternative {row['index']}",
-                                            "Yen's k-shortest paths on journey time", row["path"]))
-            codes = sorted({c for o in options + alternatives for c in o["path"]} | {src, dst})
+            found = session.run(cypher, src=src, dst=dst, detour=DETOUR,
+                                connection=CONNECTION_MIN).data()
+            limits = {"max_stops": max_stops, "candidates": len(found)}
+            if found:
+                fastest = min(found, key=lambda c: (c["journey"], c["legs"], c["co2"]))
+                extra = max_extra_min if max_extra_min is not None else extra_time_allowed(fastest["journey"])
+                within = [c for c in found if c["journey"] <= fastest["journey"] + extra]
+                greenest = min(within, key=lambda c: (c["co2"], c["journey"]))
+                shortest = min(within, key=lambda c: (c["km"], c["journey"]))
+                limits.update(fastest_min=fastest["journey"], max_extra_min=extra, within_limit=len(within))
+                stops = f"≤{max_stops} stop{'s' if max_stops != 1 else ''}"
+                for key, label, pick, how in [
+                        ("fastest", "Fastest", fastest, f"least journey time, {stops}"),
+                        ("greenest", "Greenest", greenest, "least CO₂ per seat within the time limit"),
+                        ("shortest", "Shortest distance", shortest, "least km within the time limit")]:
+                    options.append(_option(session, key, label, how, pick["path"]))
+                shown = {tuple(o["path"]) for o in options}
+                for c in sorted(within, key=lambda c: (c["journey"], c["co2"])):
+                    if len(alternatives) == k:
+                        break
+                    if tuple(c["path"]) not in shown:
+                        shown.add(tuple(c["path"]))
+                        alternatives.append(_option(session, f"alt{len(alternatives) + 1}",
+                                                    f"Alternative {len(alternatives) + 1}",
+                                                    "next fastest bookable itinerary", c["path"]))
+
+            # Reference: the unconstrained carbon optimum from GDS Dijkstra.
+            rows = session.run(PATH_DIJKSTRA, src=src, dst=dst, graph=graph, weight="weight_carbon").data()
+            unconstrained = None
+            if rows and rows[0]["path"] and (not options or rows[0]["path"] != options[1]["path"]):
+                unconstrained = _option(session, "unconstrained", "Unconstrained optimum",
+                                        "GDS Dijkstra on weight_carbon, no stop or time limit", rows[0]["path"])
+            codes = sorted({c for o in options + alternatives + [unconstrained or {"path": []}] for c in o["path"]}
+                           | {src, dst})
             stops = {r["code"]: r for r in plain(session.run(PATH_STOPS, codes=codes).data())}
-    return {"src": src, "dst": dst, "airports": stops, "options": options, "alternatives": alternatives}
+    return {"src": src, "dst": dst, "airports": stops, "options": options, "alternatives": alternatives,
+            "unconstrained": unconstrained, "limits": limits}
 
 
 # ---------------------------------------------------------------- Disruptions
@@ -363,7 +416,7 @@ def simulate_disruption(driver, airports=(), region=None, severity="CRITICAL", e
     """Close airports (by code and/or a whole region) in one explicit transaction.
 
     The closure and its DisruptionEvent (linked by AFFECTS) commit together or
-    not at all. Re-projects the active network afterwards.
+    not at all. The GDS projection is dropped and rebuilt on next use.
     """
     event_id = event_id or f"EVT-WEB-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
     with driver.session() as session:
@@ -389,7 +442,7 @@ def simulate_disruption(driver, airports=(), region=None, severity="CRITICAL", e
             tx.commit()
         disrupted = session.run("MATCH ()-[r:ROUTE {disrupted_by: $id}]->() RETURN count(r) AS n",
                                 id=event_id).single()["n"]
-    project_active_network(driver)
+    invalidate_projection(driver)
     return {"event_id": event_id, "closed_airports": closed, "disrupted_routes": disrupted}
 
 
@@ -409,7 +462,7 @@ def restore_disruption(driver, event_id):
                 """, id=event_id).single()["n"]
             tx.run("MATCH (e:DisruptionEvent {event_id: $id}) SET e.end_time = datetime()", id=event_id)
             tx.commit()
-    project_active_network(driver)
+    invalidate_projection(driver)
     return {"event_id": event_id, "reopened_airports": reopened, "restored_routes": restored}
 
 
