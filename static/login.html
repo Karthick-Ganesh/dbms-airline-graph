@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Login · Neo Airways</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Mono:wght@500;600&family=Source+Sans+3:wght@400;600;700&display=swap">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header id="topbar"></header>
+
+  <main class="page">
+    <form class="card login" id="login">
+      <h2>Security check · Crew only</h2>
+      <h1>Admin login</h1>
+      <p class="muted small">Viewing is open to everyone. The admin can edit data and simulate disruptions.</p>
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+      </div>
+      <div class="perf"></div>
+      <button class="btn" style="width:100%">Log in</button>
+    </form>
+  </main>
+
+  <script src="/js/common.js"></script>
+  <script>
+    document.querySelector("#login").addEventListener("submit", async e => {
+      e.preventDefault();
+      await App.attempt(async () => {
+        await App.api("/api/login", { method: "POST", body: {
+          username: document.querySelector("#username").value,
+          password: document.querySelector("#password").value } });
+        const next = new URLSearchParams(location.search).get("next");
+        location.href = next && next.startsWith("/") ? next : "/manage.html";
+      });
+    });
+  </script>
+</body>
+</html>

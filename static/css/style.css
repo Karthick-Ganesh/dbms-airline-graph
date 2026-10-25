@@ -1,0 +1,598 @@
+/* ==========================================================================
+   Neo Airways: boarding-pass design.
+   Every colour, font and size is a token here; JS reads the map and graph
+   colours from these variables too (App.token()).
+   ========================================================================== */
+:root {
+  /* Paper and ink */
+  --bg: #f6f1e9;
+  --surface: #fffdf9;
+  --surface-2: #efe7da;
+  --border: #e0d5c3;
+  --border-strong: #c9b99f;
+  --text: #2a2118;
+  --text-muted: #74675a;
+  --text-inverse: #fffdf9;
+
+  /* The pass itself: header band, card strips, footer */
+  --pass: #0f5c66;
+  --pass-deep: #0a454d;
+  --pass-ink: #fffdf9;
+  --pass-ink-muted: rgba(255, 253, 249, 0.68);
+  --accent: #e0913a;
+
+  /* Brand and states */
+  --primary: #0f5c66;
+  --primary-hover: #0a454d;
+  --primary-soft: #dcebea;
+  --success: #2f7d4f;
+  --warning: #c27b19;
+  --danger: #b6412e;
+  --danger-soft: #f7e3dd;
+
+  /* Route options on the map and cards */
+  --route-fastest: #0f5c66;
+  --route-greenest: #2f7d4f;
+  --route-shortest: #d9822b;
+  --route-alt: #8a5a9e;
+  --route-before: #a89a88;
+
+  /* Graph explorer node colours, one per label */
+  --node-airport: #0f5c66;
+  --node-airline: #d9822b;
+  --node-aircraft: #8a5a9e;
+  --node-engine: #7c7065;
+  --node-flight: #2f7d4f;
+  --node-event: #b6412e;
+  --edge: #b8ab98;
+
+  /* Basemap tiles (Leaflet URL template) */
+  --map-tiles: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+
+  /* Type */
+  --font-body: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --text-xs: 0.7rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2.1rem;
+
+  /* Spacing and shape */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --radius: 14px;
+  --radius-sm: 6px;
+  --notch: 11px;            /* radius of the half-circle cut-outs */
+  --stub-w: 124px;          /* width of a ticket's tear-off stub */
+  --shadow: 0 1px 2px rgba(42, 33, 24, 0.06), 0 4px 14px rgba(42, 33, 24, 0.06);
+  --shadow-lg: 0 12px 30px rgba(42, 33, 24, 0.18);
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  display: flex; flex-direction: column;
+  min-height: 100vh;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+}
+h1, h2, h3 { line-height: 1.2; margin: 0 0 var(--space-3); font-family: var(--font-display); font-weight: 700; }
+h1 { font-size: var(--text-2xl); letter-spacing: -0.01em; }
+h2 { font-size: var(--text-lg); }
+h3 { font-size: var(--text-base); }
+p { margin: 0 0 var(--space-3); }
+a { color: var(--primary); }
+code, pre { font-family: var(--font-mono); font-size: var(--text-sm); }
+.muted { color: var(--text-muted); }
+.small { font-size: var(--text-sm); }
+.hidden { display: none !important; }
+body:not([data-admin="true"]) .admin-only { display: none !important; }
+body[data-admin="true"] .guest-only { display: none !important; }
+
+/* Boarding-pass field label: tiny, spaced capitals */
+.field-label, label, th, .section-label, .kicker {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ==========================================================================
+   Header: the boarding pass band
+   ========================================================================== */
+.topbar {
+  position: relative; z-index: 1000;
+  background: var(--pass);
+  color: var(--pass-ink);
+  padding: 0 var(--space-5);
+}
+/* Perforated tear edge along the bottom */
+.topbar::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 10px;
+  background: radial-gradient(circle at 10px 10px, var(--bg) 5.5px, transparent 6px) 0 0 / 20px 10px repeat-x;
+}
+.pass-top {
+  max-width: 1400px; margin: 0 auto;
+  min-height: 108px;
+  display: flex; align-items: stretch; gap: var(--space-5);
+  padding-bottom: 8px;
+}
+
+.brand {
+  display: flex; align-items: center; gap: var(--space-3);
+  color: var(--pass-ink); text-decoration: none; white-space: nowrap;
+}
+.brand-logo {
+  display: grid; place-items: center;
+  width: 48px; height: 48px; border-radius: 50%;
+  border: 2px solid var(--pass-ink-muted);
+}
+.brand-logo svg { width: 26px; height: 26px; fill: var(--pass-ink); transform: rotate(45deg); }
+.brand-text { display: flex; flex-direction: column; line-height: 1.1; }
+.brand-name { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; letter-spacing: 0.01em; }
+.brand-sub { font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--pass-ink-muted); margin-top: 3px; }
+
+.nav { display: flex; align-items: center; gap: var(--space-1); margin-left: auto; }
+.nav a {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--pass-ink); text-decoration: none;
+}
+.nav .field-label { color: var(--pass-ink-muted); }
+.nav .field-value { font-weight: 600; font-size: var(--text-base); white-space: nowrap; border-bottom: 2px solid transparent; }
+.nav a:hover { background: rgba(255, 253, 249, 0.08); }
+.nav a[aria-current="page"] .field-label { color: var(--accent); }
+.nav a[aria-current="page"] .field-value { border-bottom-color: var(--accent); }
+.nav .auth-mobile { display: none; }
+
+/* Tear-off stub on the right: passenger, login, barcode */
+.stub {
+  position: relative;
+  display: flex; align-items: center; gap: var(--space-4);
+  padding-left: var(--space-5);
+  border-left: 2px dashed rgba(255, 253, 249, 0.38);
+}
+.stub::before {  /* half-circle cut-out where the perforation meets the top edge */
+  content: ""; position: absolute; left: calc(-1 * var(--notch) - 1px); top: calc(-1 * var(--notch));
+  width: calc(2 * var(--notch)); height: calc(2 * var(--notch)); border-radius: 50%;
+  background: var(--bg);
+}
+.stub-field { display: flex; flex-direction: column; gap: 2px; }
+.stub-field .field-label { color: var(--pass-ink-muted); }
+.stub-field .field-value { font-family: var(--font-mono); font-weight: 600; font-size: var(--text-base); text-transform: uppercase; }
+.stub-action {
+  color: var(--pass-ink); text-decoration: none; font-weight: 600; font-size: var(--text-sm); white-space: nowrap;
+  border: 1.5px solid var(--pass-ink-muted); border-radius: 999px; padding: 4px var(--space-3);
+}
+.stub-action:hover { background: var(--pass-ink); color: var(--pass); }
+.barcode {
+  width: 104px; height: 50px; flex: none; opacity: 0.92;
+  background:
+    repeating-linear-gradient(90deg, var(--pass-ink) 0 2px, transparent 2px 4px, var(--pass-ink) 4px 5px,
+                              transparent 5px 8px, var(--pass-ink) 8px 11px, transparent 11px 12px,
+                              var(--pass-ink) 12px 13px, transparent 13px 16px);
+}
+
+.nav-toggle {
+  display: none; align-self: center; margin-left: auto;
+  background: none; border: 1.5px solid var(--pass-ink-muted); border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2); cursor: pointer; color: var(--pass-ink);
+}
+.nav-toggle svg { width: 22px; height: 22px; display: block; stroke: currentColor; }
+
+@media (max-width: 1240px) { .barcode { display: none; } }
+@media (max-width: 1060px) {
+  .pass-top { min-height: 84px; }
+  .nav-toggle { display: block; }
+  .nav {
+    display: none;
+    position: absolute; top: 100%; left: 0; right: 0; z-index: 1001;
+    flex-direction: column; align-items: stretch; gap: 0;
+    background: var(--pass-deep); padding: var(--space-3) var(--space-5) var(--space-4);
+    box-shadow: var(--shadow-lg);
+  }
+  .nav.open { display: flex; }
+  .nav a { flex-direction: row; align-items: baseline; gap: var(--space-3); padding: var(--space-3) var(--space-2); }
+  .nav .field-label { min-width: 110px; }
+  .stub { margin-left: 0; }
+}
+@media (max-width: 640px) {
+  .topbar { padding: 0 var(--space-4); }
+  .pass-top { min-height: 72px; gap: var(--space-3); }
+  .brand-logo { width: 38px; height: 38px; }
+  .brand-name { font-size: 1.25rem; }
+  .brand-sub { letter-spacing: 0.1em; }
+  .stub { display: none; }
+  .nav .auth-mobile { display: flex; }
+  .nav { padding-left: var(--space-4); padding-right: var(--space-4); }
+}
+
+/* ==========================================================================
+   Footer: the bottom stub
+   ========================================================================== */
+.pass-footer {
+  position: relative; margin-top: var(--space-6);
+  background: var(--pass); color: var(--pass-ink-muted);
+  padding: 26px var(--space-5) 20px;
+  font-size: var(--text-sm);
+}
+.pass-footer::before {
+  content: ""; position: absolute; left: 0; right: 0; top: -1px; height: 10px;
+  background: radial-gradient(circle at 10px 0, var(--bg) 5.5px, transparent 6px) 0 0 / 20px 10px repeat-x;
+}
+.pass-footer-inner { max-width: 1400px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: var(--space-4);
+                     align-items: center; justify-content: space-between; }
+.pass-footer strong { color: var(--pass-ink); font-family: var(--font-display); font-size: var(--text-base); }
+.pass-footer .barcode { width: 140px; height: 28px; opacity: 0.6; }
+
+/* ==========================================================================
+   Layout
+   ========================================================================== */
+.page { width: 100%; max-width: 1400px; margin: 0 auto; padding: var(--space-6) var(--space-5) 0; flex: 1; }
+.page-header { margin-bottom: var(--space-5); }
+.page-header p { color: var(--text-muted); margin: 0; max-width: 78ch; }
+.kicker { color: var(--accent); margin-bottom: var(--space-1); display: flex; align-items: center; gap: var(--space-2); }
+.kicker::before { content: ""; width: 22px; border-top: 2px solid var(--accent); }
+.grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-4); }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: var(--space-4); align-items: start; }
+@media (max-width: 1000px) {
+  .split, .grid-2 { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .page { padding: var(--space-5) var(--space-4) 0; }
+  h1 { font-size: 1.7rem; }
+}
+
+/* ==========================================================================
+   Cards: every card is a ticket. Its first heading becomes the coloured strip.
+   ========================================================================== */
+.card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space-4);
+}
+.card + .card { margin-top: var(--space-4); }
+.card > h2:first-child, .card > .strip:first-child {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+  margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-4)) var(--space-4);
+  padding: 10px var(--space-4);
+  background: var(--pass); color: var(--pass-ink);
+  border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;
+  font-family: var(--font-body); font-size: var(--text-sm); font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase;
+}
+.card > h2:first-child::after { content: "✈"; letter-spacing: 0; opacity: 0.7; font-size: var(--text-base); }
+
+/* Perforation: a dashed tear line with half-circle cut-outs at both edges */
+.perf {
+  position: relative; height: 0;
+  border-top: 2px dashed var(--border-strong);
+  margin: var(--space-4) calc(-1 * var(--space-4));
+}
+.perf::before, .perf::after {
+  content: ""; position: absolute; top: calc(-1 * var(--notch) - 1px);
+  width: calc(2 * var(--notch)); height: calc(2 * var(--notch)); border-radius: 50%;
+  background: var(--bg); border: 1px solid var(--border);
+}
+.perf::before { left: calc(-1 * var(--notch) - 1px); clip-path: inset(0 0 0 50%); }
+.perf::after { right: calc(-1 * var(--notch) - 1px); clip-path: inset(0 50% 0 0); }
+
+/* ==========================================================================
+   Controls
+   ========================================================================== */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  font: inherit; font-weight: 700; letter-spacing: 0.02em;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--primary);
+  background: var(--primary); color: var(--text-inverse);
+  cursor: pointer; white-space: nowrap; text-decoration: none;
+}
+.btn:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+.btn:disabled { opacity: 0.6; cursor: progress; }
+.btn-secondary { background: var(--surface); color: var(--text); border-color: var(--border-strong); }
+.btn-secondary:hover { background: var(--surface-2); border-color: var(--border-strong); }
+.btn-danger { background: var(--danger); border-color: var(--danger); }
+.btn-danger:hover { filter: brightness(0.92); background: var(--danger); border-color: var(--danger); }
+.btn-icon { padding: var(--space-2); }
+.btn-icon svg { width: 18px; height: 18px; stroke: currentColor; fill: none; }
+
+label { display: block; color: var(--text-muted); margin-bottom: var(--space-1); }
+input, select, textarea {
+  width: 100%;
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text);
+}
+input:focus, select:focus, textarea:focus, .btn:focus-visible, .chip:focus-visible, .tab:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+.field { margin-bottom: var(--space-3); }
+
+.chip {
+  display: inline-block;
+  padding: 2px var(--space-3);
+  border: 1px dashed var(--border-strong); border-radius: 999px;
+  background: var(--surface); color: var(--text);
+  font-family: var(--font-mono); font-size: var(--text-sm); cursor: pointer; text-decoration: none;
+}
+.chip:hover { border-style: solid; border-color: var(--primary); color: var(--primary); }
+.chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+.badge {
+  display: inline-block; padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  background: var(--surface-2); color: var(--text-muted);
+}
+.badge-active { background: var(--primary-soft); color: var(--success); }
+.badge-closed, .badge-cancelled, .badge-critical, .badge-disrupted { background: var(--danger-soft); color: var(--danger); }
+
+/* Tables */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+th, td { text-align: left; padding: var(--space-2); border-bottom: 1px dashed var(--border); vertical-align: top; }
+th { color: var(--text-muted); white-space: nowrap; border-bottom: 1.5px solid var(--border-strong); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Airport picker (autocomplete) */
+.picker { position: relative; }
+.picker-list {
+  position: absolute; z-index: 1100; left: 0; right: 0; top: calc(100% + 2px);
+  margin: 0; padding: var(--space-1) 0; list-style: none;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
+  max-height: 280px; overflow-y: auto;
+  font-family: var(--font-body); font-size: var(--text-base);
+}
+.picker-list li { padding: var(--space-2) var(--space-3); cursor: pointer; }
+.picker-list li[aria-selected="true"], .picker-list li:hover { background: var(--primary-soft); }
+.picker-list .code { font-weight: 600; font-family: var(--font-mono); margin-right: var(--space-2); color: var(--primary); }
+
+/* Toasts */
+.toasts { position: fixed; z-index: 2000; right: var(--space-4); bottom: var(--space-4);
+          display: flex; flex-direction: column; gap: var(--space-2); max-width: min(420px, calc(100vw - 32px)); }
+.toast {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
+  background: var(--pass); color: var(--pass-ink);
+  border-left: 4px solid var(--accent);
+}
+.toast-error { background: var(--danger); border-left-color: var(--pass-ink); }
+.toast-success { background: var(--success); border-left-color: var(--pass-ink); }
+
+/* Loading spinner */
+.spinner {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--primary);
+  animation: spin 0.8s linear infinite; display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.empty { padding: var(--space-5); text-align: center; color: var(--text-muted); }
+.section-label { color: var(--text-muted); margin: var(--space-5) 0 var(--space-3); display: flex; align-items: center; gap: var(--space-3); }
+.section-label::after { content: ""; flex: 1; border-top: 2px dashed var(--border-strong); }
+
+/* ==========================================================================
+   Route finder: the search pass
+   ========================================================================== */
+.search-bar {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  gap: var(--space-4); align-items: end;
+}
+.search-bar input { font-family: var(--font-display); font-size: 1.2rem; font-weight: 600; padding: 10px var(--space-3); }
+.search-bar .btn-search { padding: 12px var(--space-5); font-size: var(--text-base); }
+.swap {
+  align-self: end; margin-bottom: 6px;
+  display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%;
+  border: 1.5px dashed var(--border-strong); background: var(--surface); color: var(--primary); cursor: pointer;
+}
+.swap svg { width: 20px; height: 20px; fill: currentColor; transform: rotate(90deg); }
+.swap:hover { border-style: solid; border-color: var(--primary); }
+@media (max-width: 640px) {
+  .search-bar { grid-template-columns: minmax(0, 1fr) auto; }
+  .search-bar .field-to { grid-column: 1; }
+  .search-bar .swap { grid-row: 1 / span 2; grid-column: 2; align-self: center; margin: 0; }
+  .search-bar .btn-search { grid-column: 1 / -1; }
+}
+.examples { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+
+.map { height: 600px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface-2); z-index: 0; box-shadow: var(--shadow); }
+@media (max-width: 1000px) { .map { height: 400px; } }
+
+/* ==========================================================================
+   Ticket: a result itinerary printed as a boarding pass with a tear-off stub
+   ========================================================================== */
+.ticket {
+  --ticket-color: var(--option-color, var(--pass));
+  position: relative;
+  display: grid; grid-template-columns: minmax(0, 1fr) var(--stub-w);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.ticket + .ticket { margin-top: var(--space-3); }
+.ticket.option { cursor: pointer; transition: opacity 0.15s, transform 0.15s; }
+.ticket.option:hover { transform: translateY(-1px); }
+.ticket.dimmed { opacity: 0.5; }
+/* Half-circle cut-outs at the top and bottom of the stub's perforation */
+.ticket::before, .ticket::after {
+  content: ""; position: absolute; z-index: 1;
+  right: calc(var(--stub-w) - var(--notch) - 1px);
+  width: calc(2 * var(--notch)); height: calc(2 * var(--notch)); border-radius: 50%;
+  background: var(--bg); border: 1px solid var(--border);
+}
+.ticket::before { top: calc(-1 * var(--notch) - 1px); clip-path: inset(50% 0 0 0); }
+.ticket::after { bottom: calc(-1 * var(--notch) - 1px); clip-path: inset(0 0 50% 0); }
+
+.ticket-strip {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2);
+  padding: 8px var(--space-3);
+  background: var(--ticket-color); color: var(--pass-ink);
+  font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+}
+.ticket-main > .ticket-strip { border-top-left-radius: calc(var(--radius) - 1px); }
+.ticket-stub > .ticket-strip { border-top-right-radius: calc(var(--radius) - 1px); justify-content: center; }
+.ticket-strip .algo { letter-spacing: 0.04em; text-transform: none; font-weight: 600; opacity: 0.85; text-align: right; }
+.ticket-body { padding: var(--space-3); }
+.ticket-stub { border-left: 2px dashed var(--border-strong); display: flex; flex-direction: column; min-width: 0; }
+.ticket-stub .ticket-body { display: grid; gap: var(--space-2); }
+
+.route-codes {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--space-2);
+  font-family: var(--font-mono); font-weight: 600; font-size: 1.35rem; line-height: 1.2; color: var(--text);
+}
+.route-codes .hop { width: 14px; height: 14px; fill: var(--ticket-color); transform: rotate(90deg); flex: none; }
+.route-cities { color: var(--text-muted); font-size: var(--text-sm); margin-top: 2px; }
+.stub-row .field-label { color: var(--text-muted); display: block; }
+.stub-row .v { font-family: var(--font-mono); font-weight: 600; font-size: var(--text-base); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ticket .note { font-size: var(--text-sm); color: var(--text-muted); margin-top: var(--space-2); }
+.delta { font-size: var(--text-sm); font-weight: 600; }
+.delta.better { color: var(--success); }
+.delta.worse { color: var(--danger); }
+.legs { margin-top: var(--space-2); }
+.legs summary { font-size: var(--text-sm); }
+.legs table { margin-top: var(--space-2); }
+@media (max-width: 420px) { :root { --stub-w: 108px; } .route-codes { font-size: 1.15rem; } .stub-row .v { font-size: var(--text-sm); } }
+
+.map-label {
+  background: var(--pass); border: none; border-radius: var(--radius-sm);
+  padding: 1px var(--space-2); font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  color: var(--pass-ink); box-shadow: var(--shadow);
+}
+.leaflet-tooltip.map-label::before { display: none; }
+
+/* ==========================================================================
+   Tabs (graph explorer, manage page): ticket tabs
+   ========================================================================== */
+.tabs { display: flex; flex-wrap: wrap; gap: var(--space-1); border-bottom: 2px dashed var(--border-strong); margin-bottom: var(--space-4); }
+.tab {
+  font: inherit; font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-muted); background: none; cursor: pointer;
+  border: 1px solid transparent; border-bottom: none; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  padding: var(--space-2) var(--space-3); margin-bottom: -2px;
+}
+.tab:hover { color: var(--text); }
+.tab[aria-selected="true"] { color: var(--pass-ink); background: var(--pass); border-color: var(--pass); }
+
+/* ==========================================================================
+   Graph explorer
+   ========================================================================== */
+.explore-bar { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: end; }
+.explore-bar .mode-field { flex: 1 1 220px; }
+.explore-actions { display: flex; gap: var(--space-2); }
+.graph-wrap { position: relative; }
+.graph {
+  height: 640px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+@media (max-width: 1000px) { .graph { height: 460px; } }
+.legend { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-2); font-size: var(--text-sm); }
+.legend-item { display: inline-flex; align-items: center; gap: var(--space-1); }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.legend-line { display: inline-block; width: 22px; border-top: 3px solid; }
+table.props th { width: 40%; color: var(--text-muted); font-family: var(--font-mono); font-weight: 500;
+                 letter-spacing: 0; text-transform: none; font-size: var(--text-sm); white-space: normal; word-break: break-word;
+                 border-bottom: 1px dashed var(--border); }
+table.props td { word-break: break-word; }
+#details { max-height: 640px; overflow-y: auto; }
+div.vis-tooltip {
+  font-family: var(--font-body) !important; font-size: var(--text-sm) !important;
+  background: var(--pass) !important; color: var(--pass-ink) !important;
+  border: none !important; border-radius: var(--radius-sm) !important; padding: var(--space-1) var(--space-2) !important;
+}
+
+/* Segmented control (Graph view / Map view) */
+.segmented { display: inline-flex; border: 1.5px solid var(--pass); border-radius: 999px; overflow: hidden; }
+.segmented button {
+  font: inherit; font-weight: 700; font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-4); border: 0; cursor: pointer;
+  background: var(--surface); color: var(--pass);
+}
+.segmented button[aria-pressed="true"] { background: var(--pass); color: var(--pass-ink); }
+
+/* ==========================================================================
+   Forms (manage, disruptions, login)
+   ========================================================================== */
+fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--space-3); }
+.form-grid .wide { grid-column: 1 / -1; }
+@media (max-width: 520px) { .form-grid { grid-template-columns: minmax(0, 1fr); } }
+.inline-form { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; margin-bottom: var(--space-2); }
+.inline-form input, .inline-form select { width: auto; flex: 1 1 110px; min-width: 0; }
+.inline-form .btn { flex: 0 0 auto; }
+.manage-split { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
+@media (max-width: 1000px) { .manage-split { grid-template-columns: minmax(0, 1fr); } }
+.login { max-width: 420px; margin: var(--space-4) auto 0; }
+
+/* ==========================================================================
+   Analytics
+   ========================================================================== */
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--space-3); }
+.stat {
+  position: relative; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-3) var(--space-3) calc(var(--space-3) + 6px);
+}
+.stat::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; background: var(--pass); }
+.stat .value { font-family: var(--font-mono); font-size: var(--text-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .label { font-size: var(--text-sm); color: var(--text-muted); font-family: var(--font-mono); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: var(--space-4); }
+.cards .card + .card { margin-top: 0; }
+.query { display: flex; flex-direction: column; min-width: 0; }
+.query > .strip h2 { margin: 0; font: inherit; }
+.query > .strip .badge { background: var(--pass-ink); color: var(--pass); font-family: var(--font-mono); letter-spacing: 0; }
+.query .output { flex: 1; }
+.params { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: end; margin-bottom: var(--space-3); }
+.params .param { display: flex; flex-direction: column; font-family: var(--font-mono); font-weight: 500; letter-spacing: 0; text-transform: none; font-size: var(--text-sm); margin: 0; }
+.params .param input { width: 110px; padding: var(--space-1) var(--space-2); }
+.params .btn { padding: var(--space-1) var(--space-3); }
+pre.cypher { background: var(--surface-2); padding: var(--space-3); border-radius: var(--radius-sm); overflow-x: auto; margin: var(--space-2) 0 0;
+             border-left: 3px solid var(--pass); }
+svg.bars { width: 100%; height: auto; margin-bottom: var(--space-3); }
+svg.bars .bar { fill: var(--pass); }
+svg.bars .bar-label { fill: var(--text-muted); font-size: 12px; font-family: var(--font-mono); }
+svg.bars .bar-value { fill: var(--text); font-size: 12px; font-weight: 600; font-family: var(--font-mono); }
+details summary { cursor: pointer; color: var(--text-muted); }
+
+/* ==========================================================================
+   Leaflet controls and tooltips follow the design
+   ========================================================================== */
+.leaflet-container { background: var(--surface-2); font-family: var(--font-body); }
+.leaflet-bar a, .leaflet-bar a:hover { background: var(--surface); color: var(--text); border-color: var(--border); }
+.leaflet-tooltip { background: var(--surface); color: var(--text); border-color: var(--border); font-family: var(--font-body); }
+.leaflet-tooltip-top::before { border-top-color: var(--surface); }
+.leaflet-control-attribution { background: var(--surface) !important; color: var(--text-muted); opacity: 0.85; }
+.leaflet-control-attribution a { color: var(--text-muted); }
+
+/* Wide screens: the map stays in view while the tickets scroll past */
+@media (min-width: 1001px) {
+  .split > .map, .split > div > .map { position: sticky; top: var(--space-4); }
+}
+
+/* Native controls (range, checkbox) in the pass colour */
+input, select { accent-color: var(--pass); }
+/* Cards placed side by side in a grid don't need the stacked-card gap */
+.grid-2 > .card + .card, .split > .card + .card, .cards > .card + .card { margin-top: 0; }

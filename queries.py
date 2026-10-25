@@ -1,13 +1,19 @@
-"""The project's analytical Cypher queries (Review 2 advanced features).
+"""The project's analytical Cypher queries, route search and disruptions.
 
 Each query is a Query(number, title, feature, cypher, params). run_query()
 executes one and returns plain rows. The GDS queries run on an in-memory
 projection of the *active* network only (ACTIVE airports joined by ACTIVE
-ROUTE edges), so a simulated disruption changes their results. The
-transaction demo is in disruption_demo().
+ROUTE edges), so a simulated disruption changes their results.
+
+Also used by the web app (app.py): find_routes() for the route finder,
+simulate_disruption() / restore_disruption() for the disruption simulator
+(disruption_demo() is the Review 2 transaction demo built on them), and the
+*_graph() functions, which return {nodes, edges} for the graph explorer.
 """
 
+import threading
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from neo4j.exceptions import Neo4jError
 
@@ -26,8 +32,15 @@ class Query:
 
 
 def run_query(driver, q, **overrides):
-    with driver.session() as session:
-        return plain(session.run(q.cypher, {**q.params, **overrides}).data())
+    params = {**q.params, **overrides}
+    if "graph" not in params:
+        with driver.session() as session:
+            return plain(session.run(q.cypher, params).data())
+    # GDS query: hold the lock so the projection can't be rebuilt mid-query.
+    with _projection_lock:
+        ensure_projection(driver, params["graph"])
+        with driver.session() as session:
+            return plain(session.run(q.cypher, params).data())
 
 
 # ---------------------------------------------------------------- GDS projection
@@ -36,17 +49,39 @@ PROJECT_ACTIVE = """
 MATCH (s:Airport {operational_status: 'ACTIVE'})-[r:ROUTE {corridor_status: 'ACTIVE'}]->
       (t:Airport {operational_status: 'ACTIVE'})
 WITH gds.graph.project($graph, s, t, {
-       relationshipProperties: r {.weight_time, .weight_carbon, .weight_cost, .distance_km}
+       sourceNodeProperties: {latitude: s.location.latitude, longitude: s.location.longitude},
+       targetNodeProperties: {latitude: t.location.latitude, longitude: t.location.longitude},
+       relationshipProperties: r {.weight_time, .weight_carbon, .weight_cost, .distance_km,
+                                  weight_trip: r.weight_time + $connection_min}
      }) AS g
 RETURN g.graphName AS graph, g.nodeCount AS nodes, g.relationshipCount AS relationships
 """
 
+# Minimum connection time per stop. weight_trip = weight_time + this, so a
+# path's total is flight time + one connection per leg; journey time is that
+# minus one connection. Without it a one-stop itinerary can "beat" a nonstop.
+CONNECTION_MIN = 90
+
+# One projection is shared by every web request; this lock keeps a rebuild
+# from running while another request is querying it.
+_projection_lock = threading.RLock()
+
 
 def project_active_network(driver, graph=ACTIVE_GRAPH):
     """(Re)build the in-memory GDS graph of the currently active network."""
-    with driver.session() as session:
+    with _projection_lock, driver.session() as session:
         session.run("CALL gds.graph.drop($graph, false) YIELD graphName RETURN graphName", graph=graph).consume()
-        return session.run(PROJECT_ACTIVE, graph=graph).data()[0]
+        return session.run(PROJECT_ACTIVE, graph=graph, connection_min=float(CONNECTION_MIN)).data()[0]
+
+
+def ensure_projection(driver, graph=ACTIVE_GRAPH):
+    """Project the active network only if it isn't in memory yet."""
+    with _projection_lock:
+        with driver.session() as session:
+            exists = session.run("CALL gds.graph.exists($graph) YIELD exists RETURN exists",
+                                 graph=graph).single()["exists"]
+        if not exists:
+            return project_active_network(driver, graph)
 
 
 # ---------------------------------------------------------------- Queries
@@ -184,22 +219,198 @@ RETURN al.airline_id AS airline, al.name AS name, all_routes, hubs,
        round(100.0 * via_hubs / all_routes, 1) AS pct_routes_from_hubs
 ORDER BY pct_routes_from_hubs DESC LIMIT 10
 """, {"min_routes": 100}),
+
+    Query(13, "Shortest-distance route from Delhi to New York", "GDS A* (haversine heuristic on Airport coordinates)", """
+MATCH (s:Airport {airport_id: $src}), (t:Airport {airport_id: $dst})
+CALL gds.shortestPath.astar.stream($graph, {
+  sourceNode: s, targetNode: t, relationshipWeightProperty: 'distance_km',
+  latitudeProperty: 'latitude', longitudeProperty: 'longitude'
+}) YIELD nodeIds, totalCost
+RETURN [n IN gds.util.asNodes(nodeIds) | n.airport_id] AS path,
+       size(nodeIds) - 1 AS flights, round(totalCost) AS km
+""", {"src": "DEL", "dst": "JFK", "graph": ACTIVE_GRAPH}),
+
+    Query(14, "Top 3 fastest itineraries from Delhi to New York", "GDS Yen's k-shortest paths (route recommendation)", """
+MATCH (s:Airport {airport_id: $src}), (t:Airport {airport_id: $dst})
+CALL gds.shortestPath.yens.stream($graph, {
+  sourceNode: s, targetNode: t, k: $k, relationshipWeightProperty: 'weight_trip'
+}) YIELD index, nodeIds, totalCost
+RETURN index + 1 AS rank, [n IN gds.util.asNodes(nodeIds) | n.airport_id] AS path,
+       size(nodeIds) - 1 AS flights, round(totalCost - $connection_min) AS journey_minutes
+ORDER BY rank
+""", {"src": "DEL", "dst": "JFK", "k": 3, "connection_min": CONNECTION_MIN, "graph": ACTIVE_GRAPH}),
 ]
 
 
-# ---------------------------------------------------------------- Transaction demo
+# ---------------------------------------------------------------- Route finder
+
+PATH_DIJKSTRA = """
+MATCH (s:Airport {airport_id: $src}), (t:Airport {airport_id: $dst})
+CALL gds.shortestPath.dijkstra.stream($graph, {
+  sourceNode: s, targetNode: t, relationshipWeightProperty: $weight
+}) YIELD nodeIds
+RETURN 0 AS index, [n IN gds.util.asNodes(nodeIds) | n.airport_id] AS path
+"""
+
+PATH_ASTAR = """
+MATCH (s:Airport {airport_id: $src}), (t:Airport {airport_id: $dst})
+CALL gds.shortestPath.astar.stream($graph, {
+  sourceNode: s, targetNode: t, relationshipWeightProperty: $weight,
+  latitudeProperty: 'latitude', longitudeProperty: 'longitude'
+}) YIELD nodeIds
+RETURN 0 AS index, [n IN gds.util.asNodes(nodeIds) | n.airport_id] AS path
+"""
+
+PATH_YENS = """
+MATCH (s:Airport {airport_id: $src}), (t:Airport {airport_id: $dst})
+CALL gds.shortestPath.yens.stream($graph, {
+  sourceNode: s, targetNode: t, k: $k, relationshipWeightProperty: $weight
+}) YIELD index, nodeIds
+RETURN index, [n IN gds.util.asNodes(nodeIds) | n.airport_id] AS path
+ORDER BY index
+"""
+
+# Each leg of a path: the active ROUTE edge between consecutive stops.
+PATH_LEGS = """
+UNWIND range(0, size($path) - 2) AS i
+MATCH (a:Airport {airport_id: $path[i]}), (b:Airport {airport_id: $path[i + 1]})
+CALL (a, b) {
+  MATCH (a)-[r:ROUTE {corridor_status: 'ACTIVE'}]->(b)
+  RETURN r ORDER BY r.weight_time LIMIT 1
+}
+RETURN a.airport_id AS from, b.airport_id AS to, r.avg_duration_min AS minutes,
+       r.distance_km AS km, r.co2_per_seat_kg AS co2_per_seat_kg, r.carriers AS carriers
+ORDER BY i
+"""
+
+PATH_STOPS = """
+UNWIND $codes AS code
+MATCH (a:Airport {airport_id: code})
+RETURN a.airport_id AS code, a.name AS name, a.city AS city, a.country AS country,
+       a.location AS location, a.operational_status AS status
+"""
+
+# key, label, algorithm, Cypher, weight property
+ROUTE_STRATEGIES = [
+    ("fastest", "Fastest", f"Dijkstra on weight_time + {CONNECTION_MIN} min per connection", PATH_DIJKSTRA, "weight_trip"),
+    ("greenest", "Greenest", "Dijkstra on weight_carbon", PATH_DIJKSTRA, "weight_carbon"),
+    ("shortest", "Shortest distance", "A* on distance_km", PATH_ASTAR, "distance_km"),
+]
+
+
+def _option(session, key, label, algorithm, path):
+    legs = session.run(PATH_LEGS, path=path).data()
+    return {
+        "key": key, "label": label, "algorithm": algorithm, "path": path, "legs": legs,
+        "flights": len(legs),
+        "minutes": sum(leg["minutes"] or 0 for leg in legs),
+        "journey_minutes": sum(leg["minutes"] or 0 for leg in legs) + CONNECTION_MIN * max(len(legs) - 1, 0),
+        "km": round(sum(leg["km"] or 0 for leg in legs)),
+        "co2_per_seat_kg": round(sum(leg["co2_per_seat_kg"] or 0 for leg in legs), 1),
+    }
+
+
+def find_routes(driver, src, dst, k=3, graph=ACTIVE_GRAPH):
+    """Fastest, greenest and shortest-distance paths, plus k alternatives.
+
+    Alternatives are Yen's k-shortest paths on weight_trip (flight time plus
+    CONNECTION_MIN per stop) with the fastest one (Yen's rank 1) left out. Returns {"airports", "options",
+    "alternatives"}; a path list is empty when no route exists.
+    """
+    options, alternatives = [], []
+    with _projection_lock:
+        ensure_projection(driver, graph)
+        with driver.session() as session:
+            for key, label, algorithm, cypher, weight in ROUTE_STRATEGIES:
+                rows = session.run(cypher, src=src, dst=dst, graph=graph, weight=weight).data()
+                path = rows[0]["path"] if rows else []
+                options.append(_option(session, key, label, algorithm, path))
+            rows = session.run(PATH_YENS, src=src, dst=dst, graph=graph, k=k + 1, weight="weight_trip").data()
+            for row in rows[1:]:
+                alternatives.append(_option(session, f"alt{row['index']}", f"Alternative {row['index']}",
+                                            "Yen's k-shortest paths on journey time", row["path"]))
+            codes = sorted({c for o in options + alternatives for c in o["path"]} | {src, dst})
+            stops = {r["code"]: r for r in plain(session.run(PATH_STOPS, codes=codes).data())}
+    return {"src": src, "dst": dst, "airports": stops, "options": options, "alternatives": alternatives}
+
+
+# ---------------------------------------------------------------- Disruptions
 
 DEMO_EVENT_ID = "EVT-DEMO-DXB-CLOSURE"
 
 
-def _close_airport(tx, code, event_id):
-    """Soft-close an airport and its corridors, and log the event: one unit of work."""
-    tx.run("MATCH (a:Airport {airport_id: $code}) SET a.operational_status = 'CLOSED'", code=code)
+def _close_airports(tx, codes, event_id):
+    """Soft-close ACTIVE airports and their ACTIVE corridors, tagging both with
+    the event so restore_disruption() undoes exactly this closure."""
+    closed = tx.run("""
+        MATCH (a:Airport) WHERE a.airport_id IN $codes AND a.operational_status = 'ACTIVE'
+        SET a.operational_status = 'CLOSED', a.disrupted_by = $event_id
+        RETURN collect(a.airport_id) AS codes
+        """, codes=codes, event_id=event_id).single()["codes"]
     tx.run("""
-        MATCH (:Airport {airport_id: $code})-[r:ROUTE]-()
-        WHERE r.corridor_status = 'ACTIVE'
+        MATCH (a:Airport)-[r:ROUTE]-() WHERE a.airport_id IN $codes AND r.corridor_status = 'ACTIVE'
         SET r.corridor_status = 'DISRUPTED', r.disrupted_by = $event_id
-        """, code=code, event_id=event_id)
+        """, codes=closed, event_id=event_id)
+    return closed
+
+
+def _close_airport(tx, code, event_id):
+    return _close_airports(tx, [code], event_id)
+
+
+def simulate_disruption(driver, airports=(), region=None, severity="CRITICAL", event_type="OTHER",
+                        description=None, event_id=None):
+    """Close airports (by code and/or a whole region) in one explicit transaction.
+
+    The closure and its DisruptionEvent (linked by AFFECTS) commit together or
+    not at all. Re-projects the active network afterwards.
+    """
+    event_id = event_id or f"EVT-WEB-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
+    with driver.session() as session:
+        with session.begin_transaction() as tx:
+            codes = tx.run("""
+                MATCH (a:Airport) WHERE a.airport_id IN $airports OR a.region = $region
+                RETURN collect(a.airport_id) AS codes
+                """, airports=list(airports), region=region).single()["codes"]
+            closed = _close_airports(tx, codes, event_id)
+            if not closed:
+                raise ValueError("no ACTIVE airport matches that selection")
+            what = region if region and not airports else ", ".join(closed[:5]) + ("..." if len(closed) > 5 else "")
+            tx.run("""
+                MERGE (e:DisruptionEvent {event_id: $event_id})
+                SET e.event_type = $event_type, e.severity = $severity, e.data_source = 'MANUAL',
+                    e.description = coalesce($description, 'Simulated closure of ' + $what),
+                    e.start_time = datetime(), e.end_time = null
+                WITH e
+                MATCH (a:Airport) WHERE a.airport_id IN $closed
+                MERGE (e)-[:AFFECTS]->(a)
+                """, event_id=event_id, event_type=event_type, severity=severity,
+                   description=description, what=what, closed=closed)
+            tx.commit()
+        disrupted = session.run("MATCH ()-[r:ROUTE {disrupted_by: $id}]->() RETURN count(r) AS n",
+                                id=event_id).single()["n"]
+    project_active_network(driver)
+    return {"event_id": event_id, "closed_airports": closed, "disrupted_routes": disrupted}
+
+
+def restore_disruption(driver, event_id):
+    """Reopen exactly the airports and corridors an event closed, and end the event."""
+    with driver.session() as session:
+        with session.begin_transaction() as tx:
+            reopened = tx.run("""
+                MATCH (a:Airport {disrupted_by: $id})
+                SET a.operational_status = 'ACTIVE' REMOVE a.disrupted_by
+                RETURN count(a) AS n
+                """, id=event_id).single()["n"]
+            restored = tx.run("""
+                MATCH ()-[r:ROUTE {disrupted_by: $id}]->()
+                SET r.corridor_status = 'ACTIVE' REMOVE r.disrupted_by
+                RETURN count(r) AS n
+                """, id=event_id).single()["n"]
+            tx.run("MATCH (e:DisruptionEvent {event_id: $id}) SET e.end_time = datetime()", id=event_id)
+            tx.commit()
+    project_active_network(driver)
+    return {"event_id": event_id, "reopened_airports": reopened, "restored_routes": restored}
 
 
 def disruption_demo(driver, code="DXB", src="BOM", dst="JFK"):
@@ -213,24 +424,11 @@ def disruption_demo(driver, code="DXB", src="BOM", dst="JFK"):
     project_active_network(driver)
     out["before"] = run_query(driver, route_q, src=src, dst=dst)
 
-    with driver.session() as session:
-        # 1. Committed transaction: closure + audit event together.
-        with session.begin_transaction() as tx:
-            _close_airport(tx, code, DEMO_EVENT_ID)
-            tx.run("""
-                MERGE (e:DisruptionEvent {event_id: $event_id})
-                SET e.event_type = 'OTHER', e.severity = 'CRITICAL', e.data_source = 'MANUAL',
-                    e.description = 'Demo: simulated closure of ' + $code,
-                    e.start_time = datetime(), e.end_time = null
-                WITH e MATCH (a:Airport {airport_id: $code}) MERGE (e)-[:AFFECTS]->(a)
-                """, event_id=DEMO_EVENT_ID, code=code)
-            tx.commit()
-        disrupted = session.run("MATCH ()-[r:ROUTE {disrupted_by: $id}]-() RETURN count(DISTINCT r) AS n",
-                                id=DEMO_EVENT_ID).single()["n"]
-
-    project_active_network(driver)
+    # 1. Committed transaction: closure + audit event together.
+    closure = simulate_disruption(driver, [code], event_id=DEMO_EVENT_ID,
+                                  description="Demo: simulated closure of " + code)
     out["after"] = run_query(driver, route_q, src=src, dst=dst)
-    out["disrupted_routes"] = disrupted
+    out["disrupted_routes"] = closure["disrupted_routes"]
 
     with driver.session() as session:
         # 2. Failing transaction: the second statement violates the unique
@@ -247,21 +445,90 @@ def disruption_demo(driver, code="DXB", src="BOM", dst="JFK"):
                     "MATCH (a:Airport {airport_id: 'LHR'}) RETURN a.operational_status AS s").single()["s"],
             }
 
-        # 3. Restore: reopen the airport and exactly the corridors this event disrupted.
-        with session.begin_transaction() as tx:
-            tx.run("MATCH (a:Airport {airport_id: $code}) SET a.operational_status = 'ACTIVE'", code=code)
-            tx.run("""
-                MATCH ()-[r:ROUTE {disrupted_by: $id}]-()
-                SET r.corridor_status = 'ACTIVE' REMOVE r.disrupted_by
-                """, id=DEMO_EVENT_ID)
-            tx.run("MATCH (e:DisruptionEvent {event_id: $id}) SET e.end_time = datetime()", id=DEMO_EVENT_ID)
-            tx.commit()
+    # 3. Restore: reopen the airport and exactly the corridors this event disrupted.
+    restore_disruption(driver, DEMO_EVENT_ID)
+    with driver.session() as session:
         out["restored"] = session.run("""
             MATCH (a:Airport {airport_id: $code})
             RETURN a.operational_status AS status,
                    COUNT { (a)-[:ROUTE {corridor_status: 'ACTIVE'}]-() } AS active_routes,
                    COUNT { ()-[:ROUTE {disrupted_by: $id}]-() } AS still_disrupted
             """, code=code, id=DEMO_EVENT_ID).single().data()
-
-    project_active_network(driver)
     return out
+
+
+# ---------------------------------------------------------------- Graph explorer
+
+CAPTIONS = {"Airport": "airport_id", "Airline": "airline_id", "Aircraft": "model",
+            "Engine": "engine_model", "Flight": "flight_number", "DisruptionEvent": "event_type"}
+
+AIRPORT_GRAPH = """
+MATCH (a:Airport {airport_id: $code})
+CALL (a) {
+  MATCH p = (a)-[r:ROUTE {corridor_status: 'ACTIVE'}]->(:Airport)
+  RETURN p ORDER BY size(r.carriers) DESC, r.distance_km LIMIT $limit
+  UNION
+  MATCH p = (a)-[:HUB_OF]->(:Airline)
+  RETURN p
+  UNION
+  MATCH p = (a)
+  RETURN p
+}
+RETURN p
+"""
+
+FLIGHT_GRAPH = """
+MATCH (al:Airline)-[op:OPERATES]->(f:Flight {flight_id: $flight_id}),
+      (f)-[dep:DEPARTS_FROM]->(o:Airport), (f)-[arr:ARRIVES_AT]->(d:Airport),
+      (f)-[u:USES_AIRCRAFT]->(ac:Aircraft)
+OPTIONAL MATCH (ac)-[pb:POWERED_BY]->(e:Engine)
+OPTIONAL MATCH (o)-[r:ROUTE]->(d)
+OPTIONAL MATCH (ev:DisruptionEvent)-[af:AFFECTS]->(x:Airport)
+  WHERE x IN [o, d] AND f.scheduled_departure >= ev.start_time
+    AND (ev.end_time IS NULL OR f.scheduled_departure <= ev.end_time)
+RETURN al, op, f, dep, o, arr, d, u, ac, collect(DISTINCT [pb, e]) AS engines, r,
+       collect(DISTINCT [ev, af, x]) AS events
+"""
+
+EVENT_GRAPH = """
+MATCH (e:DisruptionEvent {event_id: $event_id})
+OPTIONAL MATCH (e)-[af:AFFECTS]->(a:Airport)
+OPTIONAL MATCH (a)<-[dep:DEPARTS_FROM]-(f:Flight)
+  WHERE f.status = 'CANCELLED' AND f.scheduled_departure >= e.start_time
+    AND (e.end_time IS NULL OR f.scheduled_departure <= e.end_time)
+WITH e, collect(DISTINCT [af, a]) AS affected, collect([dep, f])[..$limit] AS cancelled
+RETURN e, affected, cancelled
+"""
+
+
+def _graph(driver, cypher, **params):
+    """Run a query and return every node and relationship in its result as
+    {nodes: [{id, label, caption, props}], edges: [{id, from, to, type, props}]}."""
+    def work(tx):
+        g = tx.run(cypher, **params).graph()
+        nodes = []
+        for n in g.nodes:
+            label = next(iter(n.labels), "")
+            nodes.append({"id": n.element_id, "label": label,
+                          "caption": str(n.get(CAPTIONS.get(label, ""), "") or ""), "props": plain(dict(n))})
+        edges = [{"id": r.element_id, "from": r.start_node.element_id, "to": r.end_node.element_id,
+                  "type": r.type, "props": plain(dict(r))} for r in g.relationships]
+        return {"nodes": nodes, "edges": edges}
+    with driver.session() as session:
+        return session.execute_read(work)
+
+
+def airport_graph(driver, code, limit=40):
+    """An airport, its busiest ACTIVE routes and the airlines it is a hub of."""
+    return _graph(driver, AIRPORT_GRAPH, code=code, limit=limit)
+
+
+def flight_graph(driver, flight_id):
+    """A flight with its airline, airports, aircraft, engines, the ROUTE edge it
+    flies and any disruption active at its airports when it departed."""
+    return _graph(driver, FLIGHT_GRAPH, flight_id=flight_id)
+
+
+def event_graph(driver, event_id, limit=60):
+    """A disruption event, the airports it affects and the flights cancelled there."""
+    return _graph(driver, EVENT_GRAPH, event_id=event_id, limit=limit)

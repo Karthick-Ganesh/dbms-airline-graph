@@ -131,6 +131,18 @@ def get_airline(driver, airline_id):
         """, airline_id=airline_id))
 
 
+def list_airlines(driver, text=None, limit=25):
+    """Airlines whose code or name starts with / contains `text`, busiest first."""
+    return _read(driver, """
+        MATCH (al:Airline)
+        WHERE $text IS NULL OR al.airline_id = toUpper($text) OR toLower(al.name) CONTAINS toLower($text)
+        RETURN al.airline_id AS airline_id, al.name AS name, al.country AS country,
+               al.fleet_size AS fleet_size, COUNT { (al)-[:OPERATES]->() } AS flights
+        ORDER BY al.airline_id = toUpper(coalesce($text, '')) DESC, flights DESC, al.airline_id
+        LIMIT $limit
+        """, text=text, limit=limit)
+
+
 def update_airline(driver, airline_id, **props):
     return _one(_write(driver, """
         MATCH (al:Airline {airline_id: $airline_id})
@@ -145,6 +157,18 @@ def delete_airline(driver, airline_id):
         DETACH DELETE al
         RETURN count(*) AS deleted
         """, airline_id=airline_id))
+
+
+# ---------------------------------------------------------------- Aircraft (read-only)
+
+def list_aircraft(driver):
+    return _read(driver, """
+        MATCH (ac:Aircraft)
+        RETURN ac.aircraft_type_id AS aircraft_type_id, ac.model AS model,
+               ac.manufacturer AS manufacturer, ac.category AS category,
+               ac.seating_capacity AS seats
+        ORDER BY ac.manufacturer, ac.model
+        """)
 
 
 # ---------------------------------------------------------------- Flight
@@ -261,6 +285,19 @@ def get_event(driver, event_id):
         OPTIONAL MATCH (e)-[:AFFECTS]->(a:Airport)
         RETURN e {.*} AS event, collect(a.airport_id) AS affects
         """, event_id=event_id))
+
+
+def list_events(driver, limit=50):
+    """Events newest first, with how many airports each affects."""
+    return _read(driver, """
+        MATCH (e:DisruptionEvent)
+        RETURN e.event_id AS event_id, e.event_type AS event_type, e.severity AS severity,
+               e.data_source AS data_source, e.description AS description,
+               e.start_time AS start_time, e.end_time AS end_time,
+               COUNT { (e)-[:AFFECTS]->() } AS airports,
+               COUNT { (:Airport {disrupted_by: e.event_id}) } AS still_closed
+        ORDER BY e.start_time DESC LIMIT $limit
+        """, limit=limit)
 
 
 def resolve_event(driver, event_id, end_time):

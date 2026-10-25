@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Disruption Simulator · Neo Airways</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Mono:wght@500;600&family=Source+Sans+3:wght@400;600;700&display=swap">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header id="topbar"></header>
+
+  <main class="page">
+    <div class="page-header">
+      <h1>Disruption Simulator</h1>
+      <p>Close airports or a whole region in one transaction and watch the network re-route around them.
+        Nothing is deleted: closures are soft state that Restore undoes exactly.</p>
+    </div>
+
+    <div class="grid-2">
+      <form class="card" id="simulate">
+        <h2>1. What closes</h2>
+        <p class="guest-only muted small"><a href="/login.html">Log in as admin</a> to run a simulation.
+          You can still view past events below.</p>
+        <fieldset class="admin-only plain">
+          <div class="field">
+            <label for="close-airport">Airports</label>
+            <input id="close-airport" placeholder="Add an airport (e.g. DXB)">
+            <div class="chips" id="close-list" style="margin-top: var(--space-2)"></div>
+          </div>
+          <div class="field">
+            <label for="region">…or a whole region</label>
+            <select id="region">
+              <option value="">No region</option>
+              <option>Africa</option><option>Asia</option><option>Europe</option>
+              <option>North America</option><option>Oceania</option><option>South America</option>
+            </select>
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="event-type">Cause</label>
+              <select id="event-type">
+                <option value="WEATHER">Weather</option><option value="FOG">Fog</option>
+                <option value="ATC_FAILURE">ATC failure</option><option value="STRIKE">Strike</option>
+                <option value="TECHNICAL">Technical</option><option value="OTHER" selected>Other</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="severity">Severity</label>
+              <select id="severity">
+                <option>MODERATE</option><option>SEVERE</option><option selected>CRITICAL</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label for="description">Description (optional)</label>
+            <input id="description" placeholder="e.g. Sandstorm closes Dubai International">
+          </div>
+          <button class="btn btn-danger" id="run">Simulate closure</button>
+        </fieldset>
+      </form>
+
+      <div class="card">
+        <h2>2. Route to watch</h2>
+        <p class="muted small">Its fastest and greenest itineraries are compared before and after the closure.</p>
+        <div class="grid-2">
+          <div class="field"><label for="watch-from">From</label><input id="watch-from"></div>
+          <div class="field"><label for="watch-to">To</label><input id="watch-to"></div>
+        </div>
+        <div id="impact" class="table-wrap"></div>
+      </div>
+    </div>
+
+    <div class="split" style="margin-top: var(--space-4)">
+      <div>
+        <div id="map" class="map" role="img" aria-label="Route before and after the closure"></div>
+        <div class="legend">
+          <span class="legend-item"><span class="legend-line" style="border-color: var(--route-before)"></span>Fastest before</span>
+          <span class="legend-item"><span class="legend-line" style="border-color: var(--route-fastest)"></span>Fastest now</span>
+          <span class="legend-item"><span class="legend-line" style="border-color: var(--route-greenest)"></span>Greenest now</span>
+          <span class="legend-item"><span class="legend-dot" style="background: var(--danger)"></span>Closed airport</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Events</h2>
+        <div id="events"><div class="empty"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/js/common.js"></script>
+  <script src="/js/map.js"></script>
+  <script src="/js/disruptions.js"></script>
+</body>
+</html>

@@ -278,15 +278,16 @@ def _load_dotenv(path=ROOT / ".env"):
             os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
-def neo4j_driver():
-    """Driver built from NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD (env or .env)."""
+def neo4j_driver(**config):
+    """Driver built from NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD (env or .env).
+    Extra keyword arguments are passed to the driver (e.g. timeouts)."""
     _load_dotenv()
     password = os.environ.get("NEO4J_PASSWORD")
     if not password:
         raise SystemExit("set NEO4J_PASSWORD in .env or the environment (or pass --dry-run)")
     uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
     user = os.environ.get("NEO4J_USER", "neo4j")
-    return GraphDatabase.driver(uri, auth=(user, password))
+    return GraphDatabase.driver(uri, auth=(user, password), **config)
 
 
 def main():

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manage Data · Neo Airways</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Mono:wght@500;600&family=Source+Sans+3:wght@400;600;700&display=swap">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header id="topbar"></header>
+
+  <main class="page">
+    <div class="page-header">
+      <h1>Manage Data</h1>
+      <p>Create, read, update and delete nodes and relationships. Every action is one Neo4j transaction.</p>
+    </div>
+
+    <div class="card guest-only">
+      <p>Data management needs the admin login.</p>
+      <a class="btn" href="/login.html?next=/manage.html">Log in</a>
+    </div>
+
+    <div class="admin-only">
+      <div class="tabs" role="tablist" id="tabs">
+        <button class="tab" role="tab" data-tab="airports" aria-selected="true">Airports</button>
+        <button class="tab" role="tab" data-tab="airlines" aria-selected="false">Airlines</button>
+        <button class="tab" role="tab" data-tab="flights" aria-selected="false">Flights</button>
+        <button class="tab" role="tab" data-tab="routes" aria-selected="false">Routes</button>
+        <button class="tab" role="tab" data-tab="hubs" aria-selected="false">Hubs</button>
+        <button class="tab" role="tab" data-tab="events" aria-selected="false">Events</button>
+      </div>
+      <div id="panel"></div>
+    </div>
+  </main>
+
+  <script src="/js/common.js"></script>
+  <script src="/js/manage.js"></script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Graph Explorer · Neo Airways</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Mono:wght@500;600&family=Source+Sans+3:wght@400;600;700&display=swap">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header id="topbar"></header>
+
+  <main class="page">
+    <div class="page-header">
+      <h1>Graph Explorer</h1>
+      <p>Explore the property graph directly: drag, zoom and click nodes, or switch to the map to see the same
+        airports and routes geographically. Double-click an airport to expand its routes.</p>
+    </div>
+
+    <div class="card">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" data-mode="airport" aria-selected="true">Airport network</button>
+        <button class="tab" role="tab" data-mode="flight" aria-selected="false">Flight</button>
+        <button class="tab" role="tab" data-mode="event" aria-selected="false">Disruption event</button>
+      </div>
+      <form id="explore" class="explore-bar">
+        <div class="mode-field" data-mode="airport">
+          <label for="airport">Airport</label>
+          <input id="airport" placeholder="City, airport or code (e.g. DEL)">
+        </div>
+        <div class="mode-field" data-mode="airport">
+          <label for="limit">Routes shown: <span id="limit-value">40</span></label>
+          <input id="limit" type="range" min="10" max="120" step="10" value="40">
+        </div>
+        <div class="mode-field hidden" data-mode="flight">
+          <label for="flight">Flight</label>
+          <input id="flight" list="flight-list" placeholder="e.g. AA1-20150101">
+          <datalist id="flight-list"></datalist>
+        </div>
+        <div class="mode-field hidden" data-mode="event">
+          <label for="event">Event</label>
+          <select id="event"></select>
+        </div>
+        <div class="explore-actions">
+          <button class="btn" id="show">Show</button>
+          <button type="button" class="btn btn-secondary" id="fit">Fit</button>
+        </div>
+        <div class="segmented" role="group" aria-label="View">
+          <button type="button" data-view="graph" aria-pressed="true">Graph view</button>
+          <button type="button" data-view="map" aria-pressed="false">Map view</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="split" style="margin-top: var(--space-4)">
+      <div class="graph-wrap">
+        <div id="graph" class="graph" aria-label="Interactive graph"></div>
+        <div id="geo" class="graph hidden" aria-label="Airports and routes on a world map"></div>
+        <div class="legend" id="legend"></div>
+      </div>
+      <aside class="card" id="details">
+        <div class="empty small">Click a node or relationship to see its properties.</div>
+      </aside>
+    </div>
+  </main>
+
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/js/common.js"></script>
+  <script src="/js/map.js"></script>
+  <script src="/js/network.js"></script>
+</body>
+</html>
