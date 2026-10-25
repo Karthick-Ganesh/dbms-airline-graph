@@ -19,10 +19,12 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from neo4j.exceptions import ConstraintError, Neo4jError, ServiceUnavailable
 from pydantic import BaseModel, Field
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 import crud
 import queries
+import traffic
 from seed import ROOT, _load_dotenv, neo4j_driver
 
 _load_dotenv()
@@ -40,6 +42,7 @@ async def lifespan(app):
                                     max_transaction_retry_time=5)
     try:
         queries.ensure_projection(app.state.driver)
+        traffic.warm(app.state.driver)
     except ServiceUnavailable:
         pass  # Neo4j not started yet: requests fail with 503 until it is.
     yield
@@ -49,6 +52,7 @@ async def lifespan(app):
 app = FastAPI(title="Airline Route Optimization", lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=os.environ.get("SESSION_SECRET") or secrets.token_hex(32),
                    same_site="strict", max_age=8 * 3600)
+app.add_middleware(GZipMiddleware, minimum_size=2000)  # the live-traffic list compresses ~4x
 
 
 @app.middleware("http")
@@ -98,8 +102,10 @@ def deleted(result, what):
 
 
 def network_changed(driver):
-    """Rebuild the GDS projection after a write that changes the ACTIVE network."""
+    """Rebuild the GDS projection and the live-traffic timetable after a write
+    that changes the ACTIVE network."""
     queries.project_active_network(driver)
+    traffic.invalidate(driver)
 
 
 # ---------------------------------------------------------------- Auth
@@ -537,6 +543,7 @@ def delete_event(event_id: str, driver=Depends(db)):
     if event["event"].get("data_source") != "MANUAL":
         raise HTTPException(409, "Only manually created events can be deleted")
     queries.restore_disruption(driver, event_id)  # reopen anything it still holds closed
+    traffic.invalidate(driver)
     return deleted(crud.delete_event(driver, event_id), f"Event {event_id}")
 
 
@@ -544,14 +551,32 @@ def delete_event(event_id: str, driver=Depends(db)):
 def simulate_disruption(body: DisruptionIn, driver=Depends(db)):
     if not body.airports and not body.region:
         raise HTTPException(422, "Choose at least one airport or a region")
-    return queries.simulate_disruption(driver, [a.upper() for a in body.airports], body.region or None,
-                                       body.severity, body.event_type, body.description or None)
+    result = queries.simulate_disruption(driver, [a.upper() for a in body.airports], body.region or None,
+                                         body.severity, body.event_type, body.description or None)
+    traffic.invalidate(driver)
+    return result
 
 
 @app.post("/api/disruptions/{event_id}/restore", dependencies=admin)
 def restore_disruption(event_id: str, driver=Depends(db)):
     found(crud.get_event(driver, event_id), f"Event {event_id}")
-    return queries.restore_disruption(driver, event_id)
+    result = queries.restore_disruption(driver, event_id)
+    traffic.invalidate(driver)
+    return result
+
+
+# ---------------------------------------------------------------- Live traffic
+
+@app.get("/api/live")
+def live_traffic(driver=Depends(db)):
+    """Simulated flights in the air right now (see traffic.py)."""
+    return traffic.live(driver)
+
+
+@app.get("/api/replay")
+def replay(day: str = Query("2015-01-26", pattern=r"^2015-01-(0[1-9]|[12]\d|3[01])$"), driver=Depends(db)):
+    """The real January 2015 Flight nodes departing on one day."""
+    return traffic.replay(driver, day)
 
 
 # Static frontend last, so /api/* routes take precedence.

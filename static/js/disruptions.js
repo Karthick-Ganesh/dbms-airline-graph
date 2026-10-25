@@ -55,9 +55,9 @@
     if (ref && !ref.error) {
       ref.fastest.path.filter(c => closed.includes(c)).forEach(c => {
         const a = ref.airports[c];
-        drawn.push(L.circleMarker([a.location.latitude, a.location.longitude],
+        RouteMap.wrapped(off => drawn.push(L.circleMarker([a.location.latitude, a.location.longitude + off],
           { radius: 9, color: App.token("--danger"), fillColor: App.token("--danger"), fillOpacity: 0.85 })
-          .bindTooltip(`${c} closed`, { permanent: true, direction: "top", className: "map-label" }).addTo(map));
+          .bindTooltip(`${c} closed`, { permanent: true, direction: "top", className: "map-label" }).addTo(map)));
       });
     }
     const bounds = drawn.filter(l => l.bounds).map(l => l.bounds);

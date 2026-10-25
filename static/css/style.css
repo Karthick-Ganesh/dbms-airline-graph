@@ -153,7 +153,7 @@ body[data-admin="true"] .guest-only { display: none !important; }
   border-radius: var(--radius-sm);
   color: var(--pass-ink); text-decoration: none;
 }
-.nav .field-label { color: var(--pass-ink-muted); }
+.nav .field-label { color: var(--pass-ink-muted); white-space: nowrap; }
 .nav .field-value { font-weight: 600; font-size: var(--text-base); white-space: nowrap; border-bottom: 2px solid transparent; }
 .nav a:hover { background: rgba(255, 253, 249, 0.08); }
 .nav a[aria-current="page"] .field-label { color: var(--accent); }
@@ -596,3 +596,27 @@ details summary { cursor: pointer; color: var(--text-muted); }
 input, select { accent-color: var(--pass); }
 /* Cards placed side by side in a grid don't need the stacked-card gap */
 .grid-2 > .card + .card, .split > .card + .card, .cards > .card + .card { margin-top: 0; }
+
+/* ==========================================================================
+   Live traffic
+   ========================================================================== */
+.live-wrap { position: relative; }
+.live-map { height: 680px; }
+@media (max-width: 1000px) { .live-map { height: 460px; } }
+.plane-canvas { position: absolute; inset: 0; z-index: 450; pointer-events: none; transition: opacity 0.12s; }
+.clock { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); margin-bottom: var(--space-4); }
+.clock > div { display: flex; flex-direction: column; }
+.clock .field-label { color: var(--text-muted); }
+.clock-time { font-family: var(--font-mono); font-weight: 600; font-size: 1.7rem; line-height: 1.1; color: var(--pass); font-variant-numeric: tabular-nums; }
+.clock-time.small-time { font-size: 1.15rem; color: var(--text); }
+.board-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: var(--space-2); margin-bottom: var(--space-4); }
+.board-stat { background: var(--surface-2); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); display: flex; flex-direction: column; }
+.board-stat .field-label { color: var(--text-muted); }
+.board-stat .v { font-family: var(--font-mono); font-weight: 600; font-size: var(--text-lg); font-variant-numeric: tabular-nums; }
+.chip[aria-pressed="true"] { background: var(--pass); color: var(--pass-ink); border-style: solid; border-color: var(--pass); }
+.replay-row { display: flex; gap: var(--space-2); margin-bottom: var(--space-3); }
+.replay-row select { flex: 1; }
+#scrub { padding: 0; margin-bottom: var(--space-3); }
+.progress { position: relative; height: 4px; margin: var(--space-4) 10px var(--space-2); border-top: 2px dashed var(--border-strong); }
+.progress-fill { position: absolute; left: 0; top: -2px; height: 2px; background: var(--ticket-color); }
+.progress-plane { position: absolute; top: -13px; transform: translateX(-50%); color: var(--ticket-color); font-size: 15px; line-height: 1; }

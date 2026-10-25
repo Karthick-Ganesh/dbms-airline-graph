@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Traffic · Neo Airways</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Mono:wght@500;600&family=Source+Sans+3:wght@400;600;700&display=swap">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header id="topbar"></header>
+
+  <main class="page">
+    <div class="page-header">
+      <h1>Live Traffic</h1>
+      <p>Every plane in the air right now on the active route network, moving in real time. Switch to Replay to
+        watch the real January 2015 flights, including Winter Storm Juno. Click any plane for its boarding pass.</p>
+    </div>
+
+    <div class="split">
+      <div class="live-wrap">
+        <div id="map" class="map live-map" role="img" aria-label="Map of flights currently in the air"></div>
+      </div>
+
+      <div>
+        <section class="card" id="board">
+          <h2>Flight board</h2>
+          <div class="segmented" role="group" aria-label="Mode" style="margin-bottom: var(--space-4)">
+            <button type="button" data-mode="live" aria-pressed="true">Live now</button>
+            <button type="button" data-mode="replay" aria-pressed="false">Replay 2015</button>
+          </div>
+
+          <div class="clock">
+            <div><span class="field-label">UTC</span><span class="clock-time" id="clock-utc">--:--:--</span></div>
+            <div><span class="field-label" id="clock-local-label">Your time</span><span class="clock-time small-time" id="clock-local">--:--</span></div>
+          </div>
+
+          <div class="board-stats" id="stats"></div>
+
+          <div id="live-controls">
+            <div class="field">
+              <label for="airline">Highlight an airline</label>
+              <input id="airline" placeholder="Airline code, e.g. AI, EK, 6E" maxlength="3">
+            </div>
+            <div class="field-label muted">Most flights in the air</div>
+            <div class="chips" id="top-airlines" style="margin-top: var(--space-2)"></div>
+            <div class="perf"></div>
+            <p class="small muted" style="margin:0">Simulated from the route graph: every route and airline pair flies once a day
+              at a fixed local time (06:00–23:30), for the route's average duration. Closed airports and corridors have no traffic.</p>
+          </div>
+
+          <div id="replay-controls" class="hidden">
+            <div class="field">
+              <label for="day">Day (January 2015)</label>
+              <select id="day"></select>
+            </div>
+            <div class="replay-row">
+              <button type="button" class="btn" id="play">Pause</button>
+              <select id="speed" aria-label="Playback speed">
+                <option value="60">60× (1 min/s)</option>
+                <option value="300">300× (5 min/s)</option>
+                <option value="900" selected>900× (15 min/s)</option>
+                <option value="1800">1800× (30 min/s)</option>
+              </select>
+            </div>
+            <input type="range" id="scrub" min="0" max="1440" step="1" value="0" aria-label="Time of day">
+            <div class="legend" id="replay-legend"></div>
+            <div class="perf"></div>
+            <p class="small muted" style="margin:0">The real Flight nodes: US flights from the BTS 2015 dataset and synthetic
+              flights elsewhere, using their actual (delayed) departure and arrival times.</p>
+          </div>
+        </section>
+
+        <section id="flight" aria-live="polite"></section>
+      </div>
+    </div>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/js/common.js"></script>
+  <script src="/js/map.js"></script>
+  <script src="/js/live.js"></script>
+</body>
+</html>

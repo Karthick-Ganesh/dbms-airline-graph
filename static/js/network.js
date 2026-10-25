@@ -75,7 +75,9 @@
       + `<span class="legend-item small muted">${nodes.length} nodes · ${edges.length} relationships</span>`;
   }
 
-  /** Map view: Airport nodes at their location, ROUTE edges as great-circle arcs. */
+  /** Map view: Airport nodes at their location, ROUTE edges as great-circle arcs.
+   *  Everything is drawn in each world copy (RouteMap.wrapped) so lines and
+   *  markers stay together when the map wraps around. */
   function renderMap(fit = true) {
     geoLayer?.remove();
     geoLayer = L.featureGroup().addTo(geo);
@@ -83,43 +85,52 @@
     const airports = new Map(items.filter(n => n.label === "Airport" && n.props.location).map(n => [n.id, n]));
     const pos = n => [n.props.location.latitude, n.props.location.longitude];
     const affected = new Set(items.filter(e => e.type === "AFFECTS").map(e => e.to));
+    const view = L.latLngBounds([]);   // what to fit: the real (offset 0) lines and centre airports
+
+    const line = (pts, style, tip, onClick) => {
+      view.extend(L.latLngBounds(pts));
+      RouteMap.wrapped(off => L.polyline(RouteMap.shift(pts, off), style)
+        .bindTooltip(tip, { sticky: true }).on("click", onClick).addTo(geoLayer));
+    };
 
     items.filter(e => e.type === "ROUTE" && airports.has(e.from) && airports.has(e.to)).forEach(e => {
       const a = airports.get(e.from), b = airports.get(e.to);
       const active = !e.props.corridor_status || e.props.corridor_status === "ACTIVE";
-      L.polyline(RouteMap.leg(pos(a), pos(b)), {
+      line(RouteMap.leg(pos(a), pos(b)), {
         color: App.token(active ? "--node-airport" : "--danger"), opacity: 0.55,
         weight: 1 + Math.min(4, (e.props.carriers || []).length / 2), dashArray: active ? null : "4 6",
-      }).bindTooltip(`${a.caption} → ${b.caption} · ${App.number(e.props.distance_km)} km · ${App.minutes(e.props.avg_duration_min)}`,
-                     { sticky: true })
-        .on("click", () => details(e)).addTo(geoLayer);
+      }, `${a.caption} → ${b.caption} · ${App.number(e.props.distance_km)} km · ${App.minutes(e.props.avg_duration_min)}`,
+      () => details(e));
     });
 
     items.filter(n => n.label === "Flight").forEach(f => {
       const dep = items.find(e => e.type === "DEPARTS_FROM" && e.from === f.id);
       const arr = items.find(e => e.type === "ARRIVES_AT" && e.from === f.id);
       if (!dep || !arr || !airports.has(dep.to) || !airports.has(arr.to)) return;
-      L.polyline(RouteMap.leg(pos(airports.get(dep.to)), pos(airports.get(arr.to))),
-                 { color: App.token("--node-flight"), weight: 4, opacity: 0.9 })
-        .bindTooltip(`Flight ${f.caption} · ${f.props.status}`, { sticky: true })
-        .on("click", () => details(f)).addTo(geoLayer);
+      line(RouteMap.leg(pos(airports.get(dep.to)), pos(airports.get(arr.to))),
+           { color: App.token("--node-flight"), weight: 4, opacity: 0.9 },
+           `Flight ${f.caption} · ${f.props.status}`, () => details(f));
     });
 
     airports.forEach(n => {
       const bad = n.props.operational_status !== "ACTIVE" || affected.has(n.id);
       const center = centers.has(n.props.airport_id);
       const color = App.token(bad ? "--danger" : "--node-airport");
-      const marker = L.circleMarker(pos(n), { radius: center ? 8 : 5, weight: 2, color,
-                                              fillColor: center || bad ? color : App.token("--surface"), fillOpacity: 1 })
-        .bindTooltip(`${n.caption} · ${App.esc(n.props.city)}${bad && n.props.operational_status !== "ACTIVE" ? " (" + n.props.operational_status + ")" : ""}`,
-                     { direction: "top", permanent: center, className: center ? "map-label" : "" })
-        .on("click", () => details(n))
-        .on("dblclick", () => load("airport", n.props.airport_id, false))
-        .addTo(geoLayer);
-      if (center) marker.bringToFront();
+      const [lat, lon] = pos(n);
+      if (center || !view.isValid()) view.extend([lat, lon]);
+      RouteMap.wrapped(off => {
+        const marker = L.circleMarker([lat, lon + off], { radius: center ? 8 : 5, weight: 2, color,
+                                                          fillColor: center || bad ? color : App.token("--surface"), fillOpacity: 1 })
+          .bindTooltip(`${n.caption} · ${App.esc(n.props.city)}${bad && n.props.operational_status !== "ACTIVE" ? " (" + n.props.operational_status + ")" : ""}`,
+                       { direction: "top", permanent: center, className: center ? "map-label" : "" })
+          .on("click", () => details(n))
+          .on("dblclick", () => load("airport", n.props.airport_id, false))
+          .addTo(geoLayer);
+        if (center) marker.bringToFront();
+      });
     });
 
-    if (fit && geoLayer.getLayers().length) geo.fitBounds(geoLayer.getBounds().pad(0.1));
+    if (fit && view.isValid()) geo.fitBounds(view.pad(0.1));
   }
 
   function setView(v) {

@@ -4,6 +4,7 @@
 const App = (() => {
   const PAGES = [
     ["/", "Route Finder"],
+    ["/live.html", "Live Traffic"],
     ["/network.html", "Graph Explorer"],
     ["/disruptions.html", "Disruptions"],
     ["/analytics.html", "Analytics"],

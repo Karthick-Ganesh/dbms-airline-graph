@@ -1,11 +1,29 @@
-// Leaflet helpers shared by the route finder and the disruption simulator.
-// Paths are drawn as great-circle arcs, the way flights actually fly.
+// Leaflet helpers shared by every map page. Paths are drawn as great-circle
+// arcs, the way flights actually fly. The tiles repeat every 360° of
+// longitude, so every line, marker and label is drawn in three world copies
+// (-360, 0, +360); otherwise a route that crosses the date line would end in
+// one copy of the world while its airport marker sits in another.
 const RouteMap = (() => {
   const rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
   const SEGMENTS = 40;  // points per leg
+  const OFFSETS = [-360, 0, 360];
+
+  const shift = (pts, off) => pts.map(([la, lo]) => [la, lo + off]);
+
+  /** Calls make(offset) once per world copy and returns the layers it made. */
+  function wrapped(make) {
+    return OFFSETS.map(make);
+  }
 
   function create(el) {
-    const map = L.map(el, { worldCopyJump: true, minZoom: 1, zoomSnap: 0.5 }).setView([25, 40], 2);
+    const map = L.map(el, {
+      worldCopyJump: true, minZoom: 1, zoomSnap: 0.5,
+      maxBounds: [[-85, -1e6], [85, 1e6]], maxBoundsViscosity: 1,   // no panning past the poles
+    }).setView([25, 40], 2);
+    // Never zoom out so far that the world is shorter than the map box (empty bands).
+    const fitHeight = () => map.setMinZoom(Math.max(1, Math.ceil(2 * Math.log2(map.getSize().y / 256)) / 2));
+    fitHeight();
+    map.on("resize", fitHeight);
     // The basemap URL is a design token (--map-tiles).
     const tiles = App.token("--map-tiles").replace(/^["']|["']$/g, "") || "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
     L.tileLayer(tiles, {
@@ -59,23 +77,24 @@ const RouteMap = (() => {
     // Each leg adds SEGMENTS points, so stop i sits at line[i * SEGMENTS]
     // (using the unwrapped longitude keeps markers on the line).
     const marks = stops.map((s, i) => line[i * SEGMENTS]);
-    L.polyline(line, { color: style.color, weight: style.weight || 4, opacity: 0.9,
-                       dashArray: style.dashArray, lineCap: "round" }).addTo(group);
-    stops.forEach((s, i) => {
-      L.circleMarker(marks[i], { radius: i === 0 || i === stops.length - 1 ? 6 : 5, color: style.color,
-                                 weight: 2, fillColor: App.token("--surface"), fillOpacity: 1 })
+    wrapped(off => L.polyline(shift(line, off), { color: style.color, weight: style.weight || 4, opacity: 0.9,
+                                                  dashArray: style.dashArray, lineCap: "round" }).addTo(group));
+    stops.forEach((s, i) => wrapped(off =>
+      L.circleMarker([marks[i][0], marks[i][1] + off], { radius: i === 0 || i === stops.length - 1 ? 6 : 5,
+                     color: style.color, weight: 2, fillColor: App.token("--surface"), fillOpacity: 1 })
         .bindTooltip(s.label || s.code, { direction: "top" })
-        .addTo(group);
-    });
+        .addTo(group)));
     group.bounds = L.latLngBounds(line);
     group.endpoints = [marks[0], marks[marks.length - 1]];
     return group;
   }
 
-  /** A permanent code label (e.g. "DEL") at a position. */
+  /** A permanent code label (e.g. "DEL") at a position, in every world copy. */
   function label(latlng, text) {
-    return L.tooltip({ permanent: true, direction: "right", className: "map-label", offset: [6, 0] })
-      .setLatLng(latlng).setContent(text);
+    const [lat, lon] = Array.isArray(latlng) ? latlng : [latlng.lat, latlng.lng];
+    return L.layerGroup(wrapped(off =>
+      L.tooltip({ permanent: true, direction: "right", className: "map-label", offset: [6, 0] })
+        .setLatLng([lat, lon + off]).setContent(text)));
   }
 
   /** Great-circle points from a to b with longitudes unwrapped (one leg). */
@@ -83,5 +102,5 @@ const RouteMap = (() => {
     return unwrap(arc(a, b, SEGMENTS));
   }
 
-  return { create, arc, leg, drawPath, label };
+  return { create, arc, leg, shift, wrapped, drawPath, label };
 })();
