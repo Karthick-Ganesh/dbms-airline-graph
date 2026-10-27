@@ -70,6 +70,7 @@
           <div class="route-cities">${App.esc(city(option.path[0]))} to ${App.esc(city(option.path[option.path.length - 1]))}
             · ${stops ? `${stops} stop${stops > 1 ? "s" : ""} via ${App.esc(option.path.slice(1, -1).map(city).join(", "))}` : "nonstop"}</div>
           ${twin ? `<div class="note">Same itinerary as ${App.esc(twin.label)}</div>` : ""}
+          ${typicalBadge(option)}
           ${delta(option, all[0])}
           ${option.key === "unconstrained" ? unbookable(option) : ""}
           <details class="legs"><summary>Legs</summary>
@@ -88,6 +89,32 @@
           ${stubRow("Flights", option.flights)}
         </div>
       </div>
+    </div>`;
+  }
+
+  /** "−13% CO₂ vs typical", like booking sites' emissions labels. */
+  function typicalBadge(option) {
+    const p = option.vs_typical_pct;
+    if (p == null) return "";
+    const cls = p <= -5 ? "better" : p >= 5 ? "worse" : "";
+    return `<span class="eco-badge ${cls}">${p === 0 ? "Typical" : `${p > 0 ? "+" : "−"}${Math.abs(p)}%`} CO₂ vs typical</span>`;
+  }
+
+  /** Where each option sits on the CO₂ range of all bookable itineraries. */
+  function co2Range() {
+    const L = result.limits;
+    if (L.co2_min == null) return "";
+    const span = Math.max(1, L.co2_max - L.co2_min);
+    const at = v => `${Math.min(100, Math.max(0, 100 * (v - L.co2_min) / span))}%`;
+    const marks = result.options.map(o =>
+      `<span class="range-mark" style="left:${at(o.co2_per_seat_kg)}; --option-color:${colorOf(o)}" title="${App.esc(o.label)}: ${App.number(o.co2_per_seat_kg, 1)} kg"></span>`).join("");
+    const saved = L.co2_max - L.co2_min;
+    return `<div class="co2-range">
+      <div class="field-label muted">Your choice matters: CO₂ per seat of the ${App.number(L.within_limit)} bookable itineraries</div>
+      <div class="range-bar"><span class="range-typical" style="left:${at(L.co2_typical)}" title="Typical"></span>${marks}</div>
+      <div class="range-labels"><span>${App.number(L.co2_min, 1)} kg</span><span>typical ${App.number(L.co2_typical, 1)} kg</span><span>${App.number(L.co2_max, 1)} kg</span></div>
+      <p class="small" style="margin: var(--space-2) 0 0">Picking the cleanest instead of the dirtiest bookable itinerary saves
+        <strong>${App.number(saved, 1)} kg CO₂</strong> per seat (${App.number(100 * saved / L.co2_max)}%).</p>
     </div>`;
   }
 
@@ -128,6 +155,7 @@
     $("#results").innerHTML = `
       <div class="card"><h2>${App.esc(result.src)} → ${App.esc(result.dst)} · Itinerary summary</h2>${headline(options)}
         ${limitsLine()}
+        ${co2Range()}
         <p class="small muted" style="margin: var(--space-2) 0 0">Journey time is the scheduled flight time plus 90 minutes for each connection.
         CO₂ per seat includes one take-off/landing cycle per leg.</p></div>
       ${options.length ? `<div class="section-label">Optimised routes</div>${options.map(o => card(o, all, airports)).join("")}` : ""}

@@ -16,7 +16,8 @@
   <main class="page">
     <div class="page-header">
       <h1>Disruption Simulator</h1>
-      <p>Close airports or a whole region in one transaction and watch the network re-route around them.
+      <p>What if an airport shuts down (fog, storm, strike)? Close airports or a whole region in one transaction and get
+        an impact report: flights and seats lost, airports cut off, how much longer trips become and where traffic shifts.
         Nothing is deleted: closures are soft state that Restore undoes exactly.</p>
     </div>
 
@@ -73,6 +74,8 @@
         <div id="impact" class="table-wrap"></div>
       </div>
     </div>
+
+    <section id="impact-report" aria-live="polite"></section>
 
     <div class="split" style="margin-top: var(--space-4)">
       <div>

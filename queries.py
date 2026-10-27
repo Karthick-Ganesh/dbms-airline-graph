@@ -11,7 +11,9 @@ simulate_disruption() / restore_disruption() for the disruption simulator
 *_graph() functions, which return {nodes, edges} for the graph explorer.
 """
 
+import statistics
 import threading
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -357,7 +359,10 @@ def find_routes(driver, src, dst, k=3, max_stops=2, max_extra_min=None, graph=AC
                 within = [c for c in found if c["journey"] <= fastest["journey"] + extra]
                 greenest = min(within, key=lambda c: (c["co2"], c["journey"]))
                 shortest = min(within, key=lambda c: (c["km"], c["journey"]))
-                limits.update(fastest_min=fastest["journey"], max_extra_min=extra, within_limit=len(within))
+                co2 = [c["co2"] for c in within]
+                limits.update(fastest_min=fastest["journey"], max_extra_min=extra, within_limit=len(within),
+                              co2_min=round(min(co2), 1), co2_typical=round(statistics.median(co2), 1),
+                              co2_max=round(max(co2), 1))
                 stops = f"≤{max_stops} stop{'s' if max_stops != 1 else ''}"
                 for key, label, pick, how in [
                         ("fastest", "Fastest", fastest, f"least journey time, {stops}"),
@@ -380,6 +385,10 @@ def find_routes(driver, src, dst, k=3, max_stops=2, max_extra_min=None, graph=AC
             if rows and rows[0]["path"] and (not options or rows[0]["path"] != options[1]["path"]):
                 unconstrained = _option(session, "unconstrained", "Unconstrained optimum",
                                         "GDS Dijkstra on weight_carbon, no stop or time limit", rows[0]["path"])
+            # How each itinerary compares with the typical (median) bookable one.
+            for o in options + alternatives + ([unconstrained] if unconstrained else []):
+                if limits.get("co2_typical"):
+                    o["vs_typical_pct"] = round(100 * (o["co2_per_seat_kg"] - limits["co2_typical"]) / limits["co2_typical"])
             codes = sorted({c for o in options + alternatives + [unconstrained or {"path": []}] for c in o["path"]}
                            | {src, dst})
             stops = {r["code"]: r for r in plain(session.run(PATH_STOPS, codes=codes).data())}
@@ -412,13 +421,21 @@ def _close_airport(tx, code, event_id):
 
 
 def simulate_disruption(driver, airports=(), region=None, severity="CRITICAL", event_type="OTHER",
-                        description=None, event_id=None):
+                        description=None, event_id=None, impact=True):
     """Close airports (by code and/or a whole region) in one explicit transaction.
 
     The closure and its DisruptionEvent (linked by AFFECTS) commit together or
-    not at all. The GDS projection is dropped and rebuilt on next use.
+    not at all. With impact=True the network-wide damage is measured too (see
+    disruption impact below) and its headline numbers stored on the event;
+    otherwise the GDS projection is just dropped and rebuilt on next use.
     """
     event_id = event_id or f"EVT-WEB-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
+    sample = before = None
+    if impact:
+        with driver.session() as session:
+            to_close = session.run(CLOSURE_SELECTION, airports=list(airports), region=region).single()["codes"]
+        sample = _impact_sample(driver, to_close)
+        before = _impact_costs(driver, *sample) if sample[0] else None
     with driver.session() as session:
         with session.begin_transaction() as tx:
             codes = tx.run("""
@@ -442,8 +459,14 @@ def simulate_disruption(driver, airports=(), region=None, severity="CRITICAL", e
             tx.commit()
         disrupted = session.run("MATCH ()-[r:ROUTE {disrupted_by: $id}]->() RETURN count(r) AS n",
                                 id=event_id).single()["n"]
-    invalidate_projection(driver)
-    return {"event_id": event_id, "closed_airports": closed, "disrupted_routes": disrupted}
+    result = {"event_id": event_id, "closed_airports": closed, "disrupted_routes": disrupted}
+    if not impact:
+        invalidate_projection(driver)
+        return result
+    project_active_network(driver)   # needed now for the "after" measurements
+    after = _impact_costs(driver, *sample) if before else None
+    result["impact"] = _summarise_impact(driver, event_id, closed, before, after)
+    return result
 
 
 def restore_disruption(driver, event_id):
@@ -479,7 +502,7 @@ def disruption_demo(driver, code="DXB", src="BOM", dst="JFK"):
 
     # 1. Committed transaction: closure + audit event together.
     closure = simulate_disruption(driver, [code], event_id=DEMO_EVENT_ID,
-                                  description="Demo: simulated closure of " + code)
+                                  description="Demo: simulated closure of " + code, impact=False)
     out["after"] = run_query(driver, route_q, src=src, dst=dst)
     out["disrupted_routes"] = closure["disrupted_routes"]
 
@@ -508,6 +531,154 @@ def disruption_demo(driver, code="DXB", src="BOM", dst="JFK"):
                    COUNT { ()-[:ROUTE {disrupted_by: $id}]-() } AS still_disrupted
             """, code=code, id=DEMO_EVENT_ID).single().data()
     return out
+
+
+# ---------------------------------------------------------------- Disruption impact
+#
+# How much damage does a closure do to the rest of the network? Trips are
+# sampled from the IMPACT_ORIGINS open airports that depend most on the closed
+# ones (largest share of their routes going there) to the IMPACT_TARGETS
+# busiest open airports. GDS single-source Dijkstra (allShortestPaths) gives the
+# fastest (weight_trip) and greenest (weight_carbon) cost of every sampled trip
+# in one call per origin, before and after the closure. Trips whose fastest
+# path went through a closed airport are the affected ones.
+
+IMPACT_ORIGINS = 25
+IMPACT_TARGETS = 50
+
+CLOSURE_SELECTION = """
+MATCH (a:Airport {operational_status: 'ACTIVE'}) WHERE a.airport_id IN $airports OR a.region = $region
+RETURN collect(a.airport_id) AS codes
+"""
+
+IMPACT_ORIGINS_Q = """
+MATCH (c:Airport)-[:ROUTE]-(n:Airport {operational_status: 'ACTIVE'})
+WHERE c.airport_id IN $closed AND NOT n.airport_id IN $closed
+WITH DISTINCT n
+WITH n, COUNT { (n)-[:ROUTE]->() } AS total,
+     COUNT { (n)-[:ROUTE]->(x:Airport) WHERE x.airport_id IN $closed } AS to_closed
+RETURN n.airport_id AS code ORDER BY 1.0 * to_closed / total DESC, total DESC LIMIT $limit
+"""
+
+IMPACT_TARGETS_Q = """
+MATCH (a:Airport {operational_status: 'ACTIVE'}) WHERE NOT a.airport_id IN $closed
+RETURN a.airport_id AS code ORDER BY COUNT { (a)-[:ROUTE]->() } DESC LIMIT $limit
+"""
+
+TRIP_COSTS = """
+MATCH (t:Airport) WHERE t.airport_id IN $targets
+WITH collect(id(t)) AS tids
+UNWIND $origins AS code
+MATCH (s:Airport {airport_id: code})
+// An airport left with no active route isn't in the projection: its trips have no route at all.
+WHERE s.operational_status = 'ACTIVE'
+  AND EXISTS { (s)-[:ROUTE {corridor_status: 'ACTIVE'}]-(:Airport {operational_status: 'ACTIVE'}) }
+CALL gds.allShortestPaths.dijkstra.stream($graph, {sourceNode: s, relationshipWeightProperty: $weight})
+YIELD targetNode, totalCost, nodeIds
+WITH code, targetNode, totalCost, nodeIds, tids WHERE targetNode IN tids
+RETURN code AS src, gds.util.asNode(targetNode).airport_id AS dst, totalCost AS cost,
+       CASE WHEN $paths THEN [n IN gds.util.asNodes(nodeIds) | n.airport_id] END AS path
+"""
+
+# Daily flights and seats lost: one departure per (route, carrier) a day, as in
+# the Live Traffic timetable, times the typical seats of the route's aircraft.
+DISRUPTED_CAPACITY = """
+MATCH ()-[r:ROUTE {disrupted_by: $id}]->()
+CALL (r) {
+  UNWIND r.aircraft_types AS type_id
+  MATCH (ac:Aircraft {aircraft_type_id: type_id}) WHERE ac.typical_seats > 0
+  RETURN avg(ac.typical_seats) AS seats
+}
+RETURN sum(size(r.carriers)) AS flights, round(sum(size(r.carriers) * coalesce(seats, 0))) AS seats
+"""
+
+# Open airports that lost at least half of their routes.
+CUT_OFF = """
+MATCH (c:Airport)-[:ROUTE]-(a:Airport {operational_status: 'ACTIVE'})
+WHERE c.airport_id IN $closed
+WITH DISTINCT a
+WITH a, COUNT { (a)-[:ROUTE]->() } AS total,
+     COUNT { (a)-[:ROUTE {corridor_status: 'ACTIVE'}]->(:Airport {operational_status: 'ACTIVE'}) } AS left
+WHERE 2 * left <= total
+RETURN a.airport_id AS code, a.city AS city, total, left
+ORDER BY left, total DESC
+"""
+
+STORE_IMPACT = """
+MATCH (e:DisruptionEvent {event_id: $id})
+SET e.impact_flights_per_day = $flights, e.impact_seats_per_day = $seats,
+    e.impact_cut_off_airports = $cut_off, e.impact_affected_trips = $affected,
+    e.impact_lost_trips = $lost, e.impact_avg_extra_min = $extra_min
+"""
+
+
+def _impact_sample(driver, closed):
+    with driver.session() as session:
+        origins = [r["code"] for r in session.run(IMPACT_ORIGINS_Q, closed=closed, limit=IMPACT_ORIGINS)]
+        targets = [r["code"] for r in session.run(IMPACT_TARGETS_Q, closed=closed, limit=IMPACT_TARGETS)]
+    return origins, targets
+
+
+def _impact_costs(driver, origins, targets):
+    """{(src, dst): (cost, path)} for the fastest trips and {(src, dst): cost} for the greenest."""
+    with _projection_lock:
+        ensure_projection(driver)
+        with driver.session(notifications_disabled_classifications=["DEPRECATION"]) as session:
+            run = lambda weight, paths: session.run(TRIP_COSTS, origins=origins, targets=targets,
+                                                    graph=ACTIVE_GRAPH, weight=weight, paths=paths)
+            fastest = {(r["src"], r["dst"]): (r["cost"], r["path"]) for r in run("weight_trip", True)}
+            greenest = {(r["src"], r["dst"]): r["cost"] for r in run("weight_carbon", False)}
+    return fastest, greenest
+
+
+def _summarise_impact(driver, event_id, closed, before, after):
+    closed_set = set(closed)
+    with driver.session() as session:
+        cap = session.run(DISRUPTED_CAPACITY, id=event_id).single()
+        cut = session.run(CUT_OFF, closed=closed).data()
+        cities = {}
+    report = {"flights_per_day": cap["flights"] or 0, "seats_per_day": int(cap["seats"] or 0),
+              "cut_off_count": len(cut), "isolated_count": sum(1 for a in cut if a["left"] == 0),
+              "cut_off": cut[:12], "sampled_trips": 0, "affected_trips": 0, "slower_trips": 0,
+              "lost_trips": 0, "avg_extra_min": 0, "avg_extra_co2_kg": 0.0, "shifts": [], "worst": []}
+    if before:
+        (fast_b, green_b), (fast_a, green_a) = before, after
+        affected = [pair for pair, (_, path) in fast_b.items() if closed_set & set(path[1:-1])]
+        extra_min, extra_co2, shifts, worst = [], [], Counter(), []
+        for pair in affected:
+            cost_b, path_b = fast_b[pair]
+            if pair not in fast_a:
+                worst.append({"src": pair[0], "dst": pair[1], "before_min": round(cost_b - CONNECTION_MIN),
+                              "after_min": None, "before_path": path_b, "after_path": []})
+                continue
+            cost_a, path_a = fast_a[pair]
+            extra_min.append(cost_a - cost_b)
+            shifts.update(path_a[1:-1])
+            if pair in green_b and pair in green_a:
+                extra_co2.append(green_a[pair] - green_b[pair])
+            worst.append({"src": pair[0], "dst": pair[1], "before_min": round(cost_b - CONNECTION_MIN),
+                          "after_min": round(cost_a - CONNECTION_MIN), "before_path": path_b, "after_path": path_a})
+        # Hardest-hit examples: a couple of stranded trips, then the biggest delays.
+        stranded = [w for w in worst if w["after_min"] is None]
+        slowed = sorted((w for w in worst if w["after_min"] is not None),
+                        key=lambda w: w["before_min"] - w["after_min"])
+        worst = stranded[:2] + slowed[:6 - min(2, len(stranded))]
+        with driver.session() as session:
+            cities = {r["code"]: r["city"] for r in session.run(
+                "UNWIND $codes AS c MATCH (a:Airport {airport_id: c}) RETURN c AS code, a.city AS city",
+                codes=[h for h, _ in shifts.most_common(6)])}
+        report.update(
+            sampled_trips=len(fast_b), affected_trips=len(affected),
+            slower_trips=sum(1 for m in extra_min if m > 0.5), lost_trips=len(affected) - len(extra_min),
+            avg_extra_min=round(statistics.mean(extra_min)) if extra_min else 0,
+            avg_extra_co2_kg=round(statistics.mean(extra_co2), 1) if extra_co2 else 0.0,
+            shifts=[{"code": h, "city": cities.get(h), "trips": n} for h, n in shifts.most_common(6)],
+            worst=worst[:6])
+    with driver.session() as session:
+        session.run(STORE_IMPACT, id=event_id, flights=report["flights_per_day"], seats=report["seats_per_day"],
+                    cut_off=report["cut_off_count"], affected=report["affected_trips"],
+                    lost=report["lost_trips"], extra_min=report["avg_extra_min"]).consume()
+    return report
 
 
 # ---------------------------------------------------------------- Graph explorer

@@ -295,7 +295,9 @@ def list_events(driver, limit=50):
                e.data_source AS data_source, e.description AS description,
                e.start_time AS start_time, e.end_time AS end_time,
                COUNT { (e)-[:AFFECTS]->() } AS airports,
-               COUNT { (:Airport {disrupted_by: e.event_id}) } AS still_closed
+               COUNT { (:Airport {disrupted_by: e.event_id}) } AS still_closed,
+               e.impact_flights_per_day AS flights_per_day, e.impact_affected_trips AS affected_trips,
+               e.impact_avg_extra_min AS avg_extra_min
         ORDER BY e.start_time DESC LIMIT $limit
         """, limit=limit)
 

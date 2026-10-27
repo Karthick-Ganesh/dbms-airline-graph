@@ -111,16 +111,67 @@
   async function loadEvents() {
     const events = await App.api("/api/events").catch(e => { App.toast(e.message, "error"); return []; });
     $("#events").innerHTML = events.length ? `<div class="table-wrap"><table>
-      <thead><tr><th>Event</th><th>Status</th><th class="num">Airports</th><th></th></tr></thead><tbody>
+      <thead><tr><th>Event</th><th>Status</th><th class="num">Impact</th><th></th></tr></thead><tbody>
       ${events.map(e => `<tr>
         <td><strong>${App.esc(e.event_id)}</strong><br><span class="small muted">${App.esc(e.event_type)} · ${App.esc(e.severity)} · ${App.esc(e.data_source)}<br>${App.esc(e.description || "")}</span></td>
         <td>${status(e)}<br><span class="small muted">${App.esc((e.start_time || "").slice(0, 16).replace("T", " "))}</span></td>
-        <td class="num">${e.airports}</td>
+        <td class="num">${e.airports} airport${e.airports === 1 ? "" : "s"}${e.flights_per_day != null
+          ? `<br><span class="small muted">${App.number(e.flights_per_day)} flights/day<br>+${App.minutes(e.avg_extra_min)} avg</span>` : ""}</td>
         <td><div class="chips">
           <a class="chip" href="/network.html?event=${encodeURIComponent(e.event_id)}">Graph</a>
           ${e.still_closed ? `<button class="chip admin-only" data-restore="${App.esc(e.event_id)}">Restore</button>` : ""}
           ${e.data_source === "MANUAL" ? `<button class="chip admin-only" data-delete="${App.esc(e.event_id)}">Delete</button>` : ""}
         </div></td></tr>`).join("")}</tbody></table></div>` : '<div class="empty">No events.</div>';
+  }
+
+  const tile = (label, value, cls = "") =>
+    `<div class="board-stat"><span class="field-label">${label}</span><span class="v ${cls}">${value}</span></div>`;
+  const path = p => p.length ? p.map(App.esc).join(" → ") : '<span class="delta worse">no route</span>';
+
+  /** The network-wide damage of a closure (returned by POST /api/disruptions). */
+  function renderImpact(res) {
+    const m = res.impact;
+    if (!m) { $("#impact-report").innerHTML = ""; return; }
+    const what = res.closed_airports.length > 5 ? `${res.closed_airports.length} airports` : res.closed_airports.join(", ");
+    $("#impact-report").innerHTML = `
+      <div class="card" style="margin-top: var(--space-4)">
+        <h2>Impact report · closing ${App.esc(what)}</h2>
+        <div class="board-stats impact-stats">
+          ${tile("Routes disrupted", App.number(res.disrupted_routes))}
+          ${tile("Flights lost / day", App.number(m.flights_per_day), "delta worse")}
+          ${tile("Seats lost / day", App.number(m.seats_per_day), "delta worse")}
+          ${tile("Airports cut off", `${m.cut_off_count}${m.isolated_count ? ` (${m.isolated_count} isolated)` : ""}`, m.cut_off_count ? "delta worse" : "")}
+          ${tile("Trips affected", `${App.number(m.affected_trips)} / ${App.number(m.sampled_trips)}`)}
+          ${tile("Avg extra time", m.avg_extra_min ? "+" + App.minutes(m.avg_extra_min) : "–", "delta worse")}
+          ${tile("No route left", App.number(m.lost_trips), m.lost_trips ? "delta worse" : "")}
+          ${tile("Extra CO₂ / seat", m.avg_extra_co2_kg ? `+${App.number(m.avg_extra_co2_kg, 1)} kg` : "–", "delta worse")}
+        </div>
+        <div class="perf"></div>
+        <div class="grid-2">
+          <div>
+            <div class="field-label muted">Airports cut off (lost half or more of their routes)</div>
+            ${m.cut_off.length ? `<div class="table-wrap"><table><thead><tr><th>Airport</th><th class="num">Routes left</th></tr></thead><tbody>
+              ${m.cut_off.map(a => `<tr><td><strong>${App.esc(a.code)}</strong> ${App.esc(a.city || "")}</td>
+                <td class="num"><span class="${a.left ? "" : "delta worse"}">${a.left} / ${a.total}</span></td></tr>`).join("")}
+              </tbody></table></div>` : '<p class="small muted">None: every neighbouring airport keeps most of its routes.</p>'}
+            <div class="field-label muted" style="margin-top: var(--space-4)">Traffic shifts to</div>
+            <div class="chips" style="margin-top: var(--space-2)">${m.shifts.map(h =>
+              `<span class="chip">${App.esc(h.code)}${h.city ? " · " + App.esc(h.city) : ""} · ${h.trips}</span>`).join("") || '<span class="small muted">–</span>'}</div>
+          </div>
+          <div>
+            <div class="field-label muted">Hardest-hit trips</div>
+            <div class="table-wrap"><table><thead><tr><th>Trip</th><th>Before → after</th><th class="num">Change</th></tr></thead><tbody>
+              ${m.worst.map(w => `<tr><td><strong>${App.esc(w.src)} → ${App.esc(w.dst)}</strong></td>
+                <td class="small">${path(w.before_path)}<br>${path(w.after_path)}</td>
+                <td class="num">${w.after_min == null ? '<span class="delta worse">stranded</span>'
+                  : `<span class="delta worse">+${App.minutes(w.after_min - w.before_min)}</span>`}</td></tr>`).join("")}
+            </tbody></table></div>
+          </div>
+        </div>
+        <p class="small muted" style="margin: var(--space-3) 0 0">How it's measured: trips from the (up to 25) open airports that depend
+          most on the closure to the 50 busiest open airports, solved before and after with GDS single-source Dijkstra
+          (fastest on journey time, greenest on CO₂ per seat). Flights and seats per day follow the Live Traffic timetable.</p>
+      </div>`;
   }
 
   async function simulate(e) {
@@ -130,13 +181,14 @@
     if (region && !confirm(`Close every active airport in ${region}? You can restore it afterwards.`)) return;
     const btn = $("#run");
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Closing…';
+    btn.innerHTML = '<span class="spinner"></span> Closing and analysing impact…';
     try {
       before = await routes();
       const res = await App.api("/api/disruptions", { method: "POST", body: {
         airports: closing, region: region || null, severity: $("#severity").value,
         event_type: $("#event-type").value, description: $("#description").value.trim() || null } });
       App.toast(`${res.event_id}: ${res.closed_airports.length} airport(s) closed, ${res.disrupted_routes} routes disrupted`, "success", 7000);
+      renderImpact(res);
       const now = await routes();
       impact(now);
       draw(now, res.closed_airports);
@@ -173,6 +225,7 @@
         await App.attempt(async () => {
           const r = await App.api(`/api/disruptions/${encodeURIComponent(restore)}/restore`, { method: "POST" });
           App.toast(`Restored ${r.reopened_airports} airport(s) and ${r.restored_routes} routes`, "success");
+          $("#impact-report").innerHTML = "";
           const now = await routes();
           impact(now);
           draw(now);

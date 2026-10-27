@@ -156,7 +156,8 @@ The scope of this project encompasses the design and implementation of a directe
 | `start_time` | DateTime | When the disruption began | 
 | `end_time` | DateTime | When it was resolved (nullable while ongoing) | 
 | `description` | String | Free-text summary | 
-| `data_source` (new) | String (enum) | BTS_2015 | SYNTHETIC - BTS_2015 events are detected from real cancellation spikes (an airport-day where ≥ 30 departures and ≥ 25% of departures were cancelled for weather or air-traffic-system reasons, merged across consecutive days). Example: Winter Storm Juno, 26–28 Jan 2015 | 
+| `data_source` (new) | String (enum) | BTS_2015 | SYNTHETIC - BTS_2015 events are detected from real cancellation spikes (an airport-day where ≥ 30 departures and ≥ 25% of departures were cancelled for weather or air-traffic-system reasons, merged across consecutive days). Example: Winter Storm Juno, 26–28 Jan 2015. MANUAL events are created by the web app's disruption simulator | 
+| `impact_flights_per_day`, `impact_seats_per_day`, `impact_cut_off_airports`, `impact_affected_trips`, `impact_lost_trips`, `impact_avg_extra_min` (new) | Integer | Headline numbers of the impact report, stored on MANUAL events when the closure is simulated (`queries.simulate_disruption`): daily flights and seats lost, airports that lost half or more of their routes, sampled trips that went through the closure, of which left without a route, and their average extra journey time | 
 
 #### 2.2 Directed Relationships & Properties:
 

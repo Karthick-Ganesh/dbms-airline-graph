@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This is a course project for BCSE302P (Database Systems Lab): **Graph-Based Airline Route Optimization for Disruption Analysis and Sustainable Travel**, built on **Neo4j** and its Graph Data Science (GDS) library. The code is a set of seed scripts, a CRUD module (`crud.py`), the analytical queries (`queries.py`) and a Review 2 walkthrough (`review2_demo.py`). There is no web UI (planned for Review 3: a FastAPI backend reusing `crud.py` and `queries.py`) and no test suite. The data is loaded in the local Neo4j Desktop DBMS "DBMS Airlines", in its default `neo4j` database, with the GDS plugin installed.
+This is a course project for BCSE302P (Database Systems Lab): **Graph-Based Airline Route Optimization for Disruption Analysis and Sustainable Travel**, built on **Neo4j** and its Graph Data Science (GDS) library. The code is a set of seed scripts, a CRUD module (`crud.py`), the analytical queries (`queries.py`), live-traffic simulation (`traffic.py`), a Review 2 walkthrough (`review2_demo.py`) and the "Neo Airways" web app: a FastAPI backend (`app.py`) over `crud.py`/`queries.py`/`traffic.py`, with plain HTML/CSS/JS pages in `static/` (Leaflet maps, vis-network graph, canvas live traffic, boarding-pass design tokens in `static/css/style.css`). There is no test suite. The final report is `Project_Report.docx`/`.pdf`. The data is loaded in the local Neo4j Desktop DBMS "DBMS Airlines", in its default `neo4j` database, with the GDS plugin installed.
 
 ## Commands
 
@@ -20,7 +20,10 @@ python -m venv .venv && .venv/Scripts/python -m pip install -r requirements.txt
 .venv/Scripts/python seed5.py            # POWERED_BY + indexes + existence/type constraints
 .venv/Scripts/python review2_demo.py     # overview, CRUD cycle, 12 queries, transaction demo
 .venv/Scripts/python review2_demo.py queries 4   # one query; parts: overview | crud | queries | tx
+.venv/Scripts/python -m uvicorn app:app --reload # web app on http://localhost:8000
 ```
+
+The web app also needs `ADMIN_USER`, `ADMIN_PASSWORD` and `SESSION_SECRET` in `.env` for the admin login (writes and disruption simulation). Route search (`queries.find_routes`) is an exact Cypher enumeration of 0/1/2-stop itineraries (`ITINERARY_PATTERNS`, UNION ALL) because GDS Dijkstra can't limit stops; greener/shorter options must stay within `extra_time_allowed` (75% of the fastest under 15 h, 50% above, max 10 h), and each connection adds `CONNECTION_MIN` = 90 min (`weight_trip`). `simulate_disruption` re-projects and measures the impact with single-source Dijkstra (`TRIP_COSTS`); other writes call `invalidate_projection`, so the GDS graph rebuilds lazily. Run only one app process at a time: processes share the projection name `active_network`. Neo4j heap is 4 GB (raised from 1 GB after an out-of-memory error).
 
 `NEO4J_PASSWORD` comes from the environment or from a git-ignored `.env` file (`seed._load_dotenv`).
 
